@@ -1,0 +1,108 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: artists
+// Fields:
+//   - name: string (required)
+//   - biography: string
+//   - imageUrl: string
+//   - genre: string (jazz/classical, required)
+//
+// Collection: albums
+// Fields:
+//   - artistId: string (required)
+//   - title: string (required)
+//   - releaseYear: string
+//   - imageUrl: string
+//   - genre: string (jazz/classical, required)
+//
+// Collection: collection
+// Fields:
+//   - userId: string (required)
+//   - albumId: string (required)
+//   - status: string (owned/wishlist, required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "debbiebli262@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isInternalUser() {
+      return isAuthenticated() && request.auth.token.email.endsWith("@music-elegante.internal");
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidArtist(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             (data.biography == null || (data.biography is string && data.biography.size() < 10000)) &&
+             (data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() < 1000)) &&
+             data.genre in ['jazz', 'classical'];
+    }
+
+    function isValidAlbum(data) {
+      return data.artistId is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             (data.releaseYear == null || (data.releaseYear is string && data.releaseYear.size() < 10)) &&
+             (data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() < 1000)) &&
+             data.genre in ['jazz', 'classical'] &&
+             (data.availability == null || data.availability is string) &&
+             (data.recordingDates == null || data.recordingDates is string) &&
+             (data.releaseDate == null || data.releaseDate is string) &&
+             (data.location == null || data.location is string) &&
+             (data.label == null || data.label is string) &&
+             (data.catalogNumber == null || data.catalogNumber is string) &&
+             (data.country == null || data.country is string) &&
+             (data.engineer == null || data.engineer is string) &&
+             (data.producer == null || data.producer is string) &&
+             (data.musicians == null || data.musicians is list) &&
+             (data.tracks == null || data.tracks is list) &&
+             (data.discs == null || data.discs is list) &&
+             (data.discCount == null || data.discCount is int) &&
+             (data.formats == null || data.formats is list) &&
+             (data.anecdotes == null || data.anecdotes is string);
+    }
+
+    function isValidCollectionItem(data) {
+      return data.userId is string &&
+             data.albumId is string &&
+             data.status in ['owned', 'wishlist'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /artists/{artistId} {
+      allow read, write: if true;
+    }
+
+    match /albums/{albumId} {
+      allow read, write: if true;
+    }
+
+    match /collection/{itemId} {
+      allow read, write: if true;
+    }
+  }
+}

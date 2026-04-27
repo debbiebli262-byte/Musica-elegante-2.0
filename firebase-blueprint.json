@@ -1,0 +1,157 @@
+{
+  "entities": {
+    "Artist": {
+      "title": "Artist",
+      "description": "A musical artist or composer.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The name of the artist." },
+        "biography": { "type": "string", "description": "The biography of the artist." },
+        "imageUrl": { "type": "string", "description": "URL to the artist's image." },
+        "genre": { "type": "string", "enum": ["jazz", "classical"], "description": "The primary genre of the artist." },
+        "period": { "type": "string", "description": "The musical period (e.g., Baroque, Romantic) for classical artists." }
+      },
+      "required": ["name", "genre"]
+    },
+    "Album": {
+      "title": "Album",
+      "description": "A musical album or recording.",
+      "type": "object",
+      "properties": {
+        "artistId": { "type": "string", "description": "Reference to the Artist ID." },
+        "artistName": { "type": "string", "description": "The name of the main artist." },
+        "title": { "type": "string", "description": "The title of the album." },
+        "releaseYear": { "type": "string", "description": "The year the album was released." },
+        "imageUrl": { "type": "string", "description": "URL to the album cover image." },
+        "genre": { "type": "string", "enum": ["jazz", "classical"], "description": "The genre of the album." },
+        "availability": { "type": "string", "description": "Stock status or availability." },
+        "recordingDates": { "type": "string", "description": "Dates when the album was recorded." },
+        "releaseDate": { "type": "string", "description": "Exact release date." },
+        "location": { "type": "string", "description": "Recording location or studio." },
+        "label": { "type": "string", "description": "Original record label." },
+        "catalogNumber": { "type": "string", "description": "Catalog number." },
+        "country": { "type": "string", "description": "Country of release." },
+        "engineer": { "type": "string", "description": "Recording engineer." },
+        "producer": { "type": "string", "description": "Album producer." },
+        "musicians": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "instrument": { "type": "string" },
+              "notes": { "type": "string" }
+            }
+          }
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "trackNumber": { "type": "integer" },
+              "discNumber": { "type": "integer" },
+              "title": { "type": "string" },
+              "duration": { "type": "string" },
+              "side": { "type": "string", "enum": ["A", "B"] },
+              "notes": { "type": "string" },
+              "orchestra": { "type": "string" },
+              "conductor": { "type": "string" },
+              "soloists": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "instrument": { "type": "string" },
+                    "birthDate": { "type": "string" },
+                    "birthPlace": { "type": "string" },
+                    "deathDate": { "type": "string" },
+                    "deathPlace": { "type": "string" }
+                  }
+                }
+              },
+              "compositionDate": { "type": "string" },
+              "compositionPlace": { "type": "string" },
+              "foundationDate": { "type": "string" },
+              "foundationPlace": { "type": "string" },
+              "founderName": { "type": "string" },
+              "choirMaster": { "type": "string" }
+            }
+          }
+        },
+        "discs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "discNumber": { "type": "integer" },
+              "title": { "type": "string" },
+              "works": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": { "type": "string" },
+                    "composer": { "type": "string" },
+                    "orchestra": { "type": "string" },
+                    "conductor": { "type": "string" },
+                    "soloists": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": { "type": "string" },
+                          "instrument": { "type": "string" },
+                          "birthDate": { "type": "string" },
+                          "birthPlace": { "type": "string" },
+                          "deathDate": { "type": "string" },
+                          "deathPlace": { "type": "string" }
+                        }
+                      }
+                    },
+                    "movements": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "trackNumber": { "type": "integer" },
+                          "title": { "type": "string" },
+                          "duration": { "type": "string" },
+                          "side": { "type": "string", "enum": ["A", "B"] }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "discCount": { "type": "integer" },
+        "formats": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["CD", "Vinilo", "DVD", "Bluray"] }
+        },
+        "anecdotes": { "type": "string", "description": "Stories or anecdotes about the album." }
+      },
+      "required": ["artistId", "title", "genre"]
+    },
+    "CollectionItem": {
+      "title": "CollectionItem",
+      "description": "An item in a user's collection or wishlist.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The ID of the user who owns this item." },
+        "albumId": { "type": "string", "description": "The ID of the album." },
+        "status": { "type": "string", "enum": ["owned", "wishlist"], "description": "Whether the item is owned or in the wishlist." }
+      },
+      "required": ["userId", "albumId", "status"]
+    }
+  },
+  "firestore": {
+    "artists": { "schema": "Artist", "description": "Collection of musical artists." },
+    "albums": { "schema": "Album", "description": "Collection of musical albums." },
+    "collection": { "schema": "CollectionItem", "description": "User collections and wishlists." }
+  }
+}
