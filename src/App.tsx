@@ -3644,7 +3644,8 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                               ))}
                             </div>
                           </div>
-                        )}
+                        );
+                        })}
                       </div>
                     </div>
                   ))}
