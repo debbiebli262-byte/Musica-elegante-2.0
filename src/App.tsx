@@ -426,20 +426,119 @@ function Home() {
   </Link>
 </section>
 
+<ArtistAnniversaryPopup artists={artists} />
 <ArtistAnniversaries artists={artists} />
     </div>
+  );
+}
+
+function getTodayArtistAnniversaries(artists: Artist[]) {
+  const today = new Date();
+  const monthDay = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+  return artists.filter(artist => {
+    const isBirth = artist.birthDate?.endsWith(monthDay);
+    const isDeath = artist.deathDate?.endsWith(monthDay);
+    return isBirth || isDeath;
+  });
+}
+
+function ArtistAnniversaryPopup({ artists }: { artists: Artist[] }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const today = new Date();
+  const monthDay = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayKey = `artist-anniversary-popup-${today.getFullYear()}-${monthDay}`;
+  const anniversaries = getTodayArtistAnniversaries(artists);
+
+  useEffect(() => {
+    if (anniversaries.length === 0) return;
+    const alreadyClosedToday = localStorage.getItem(todayKey) === 'closed';
+    if (!alreadyClosedToday) setIsOpen(true);
+  }, [anniversaries.length, todayKey]);
+
+  const closePopup = () => {
+    localStorage.setItem(todayKey, 'closed');
+    setIsOpen(false);
+  };
+
+  if (anniversaries.length === 0) return null;
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.96 }}
+            className="relative w-full max-w-2xl rounded-[2rem] bg-paper p-8 shadow-2xl border border-ink/10"
+          >
+            <button
+              type="button"
+              onClick={closePopup}
+              className="absolute right-5 top-5 rounded-full p-2 text-ink/45 hover:bg-ink/5 hover:text-ink transition-colors"
+              aria-label="Cerrar"
+            >
+              <X size={20} />
+            </button>
+
+            <div className="space-y-6 pr-8">
+              <div className="inline-flex items-center gap-3 rounded-full bg-gold/10 px-4 py-2 text-xs font-bold uppercase tracking-widest text-gold">
+                <Calendar size={16} />
+                Efemérides de hoy
+              </div>
+
+              <div>
+                <h2 className="font-serif text-4xl md:text-5xl leading-tight">Hoy hay algo especial</h2>
+                <p className="mt-3 text-ink/60 font-serif italic text-lg">
+                  {today.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+                </p>
+              </div>
+
+              <div className="space-y-3 max-h-[45vh] overflow-y-auto pr-2">
+                {anniversaries.map(artist => {
+                  const isBirth = artist.birthDate?.endsWith(monthDay);
+                  const isDeath = artist.deathDate?.endsWith(monthDay);
+                  return (
+                    <div key={artist.id} className="rounded-2xl border border-ink/10 bg-white p-5 space-y-2">
+                      <span className="text-[10px] uppercase tracking-widest font-bold text-gold">
+                        {isBirth && isDeath ? 'Nacimiento y fallecimiento' : isBirth ? 'Nacimiento' : 'Fallecimiento'}
+                      </span>
+                      <h3 className="font-serif text-2xl">{artist.name}</h3>
+                      <p className="text-sm text-ink/60 leading-relaxed">
+                        {isBirth && `Nació un día como hoy en ${artist.birthDate?.split('-')[0]}. `}
+                        {isDeath && `Falleció un día como hoy en ${artist.deathDate?.split('-')[0]}. `}
+                      </p>
+                      <Link
+                        to={`/artist/${artist.id}`}
+                        onClick={closePopup}
+                        className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-gold hover:text-ink transition-colors"
+                      >
+                        Ver artista <ChevronRight size={14} />
+                      </Link>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
 function ArtistAnniversaries({ artists }: { artists: Artist[] }) {
   const today = new Date();
   const monthDay = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  
-  const anniversaries = artists.filter(artist => {
-    const isBirth = artist.birthDate?.endsWith(monthDay);
-    const isDeath = artist.deathDate?.endsWith(monthDay);
-    return isBirth || isDeath;
-  });
+  const anniversaries = getTodayArtistAnniversaries(artists);
 
   const jazzArtists = artists.filter(a => a.genre === 'jazz');
   const classicalArtists = artists.filter(a => a.genre === 'classical');
@@ -2248,6 +2347,10 @@ function DiscogsImportPage() {
   const [discogsUrl, setDiscogsUrl] = useState('');
   const [message, setMessage] = useState('');
   const [allArtistNames, setAllArtistNames] = useState<string[]>([]);
+  const [selectedArtistNames, setSelectedArtistNames] = useState<string[]>([]);
+  const [manualArtistName, setManualArtistName] = useState('');
+  const [existingArtists, setExistingArtists] = useState<Artist[]>([]);
+  const [artistToAdd, setArtistToAdd] = useState('');
   const [collectionStatus, setCollectionStatus] = useState<'none' | 'owned' | 'wishlist'>('none');
 
   const [artistName, setArtistName] = useState('');
@@ -2289,6 +2392,82 @@ function DiscogsImportPage() {
     setFormats(Array.from(new Set(normalized)) as ('CD' | 'Vinilo' | 'DVD' | 'Bluray')[]);
   };
 
+  const resetDiscogsImportForm = () => {
+    setSearchValue('');
+    setDiscogsUrl('');
+    setMessage('');
+    setAllArtistNames([]);
+    setSelectedArtistNames([]);
+    setManualArtistName('');
+    setArtistToAdd('');
+    setCollectionStatus('none');
+    setArtistName('');
+    setTitle('');
+    setGenre('jazz');
+    setReleaseYear('');
+    setImageUrl('');
+    setCountry('');
+    setLabel('');
+    setCatalogNumber('');
+    setOriginalCatalogNumber('');
+    setEditionCatalogNumber('');
+    setEditionDate('');
+    setOriginalLabel('');
+    setOriginalYear('');
+    setOrchestra('');
+    setConductor('');
+    setProducer('');
+    setEngineer('');
+    setMasteringEngineer('');
+    setDiscCount(1);
+    setFormats(['CD']);
+    setTracks([]);
+    setDiscs([]);
+  };
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'artists'), (snapshot) => {
+      const artists = snapshot.docs
+        .map((artistDoc) => ({ id: artistDoc.id, ...artistDoc.data() } as Artist))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setExistingArtists(artists);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'artists');
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const normalizeArtistName = (value: string) => value.trim().replace(/\s+/g, ' ');
+
+  const addSelectedArtist = (name: string) => {
+    const cleanName = normalizeArtistName(name);
+    if (!cleanName) return;
+    setSelectedArtistNames((current) => {
+      const exists = current.some((existingName) => existingName.toLowerCase() === cleanName.toLowerCase());
+      return exists ? current : [...current, cleanName];
+    });
+    setArtistName((current) => current.trim() ? current : cleanName);
+  };
+
+  const removeSelectedArtist = (name: string) => {
+    setSelectedArtistNames((current) => {
+      const next = current.filter((existingName) => existingName !== name);
+      if (artistName === name) setArtistName(next[0] || '');
+      return next;
+    });
+  };
+
+  const addManualArtist = () => {
+    addSelectedArtist(manualArtistName);
+    setManualArtistName('');
+  };
+
+  const addExistingArtist = () => {
+    addSelectedArtist(artistToAdd);
+    setArtistToAdd('');
+  };
+
   const fetchFromDiscogs = async () => {
     const value = searchValue.trim();
     if (!value) {
@@ -2308,7 +2487,10 @@ function DiscogsImportPage() {
 
       const detectedGenre: Genre = data.isClassical ? 'classical' : 'jazz';
       setGenre(detectedGenre);
-      setArtistName(data.artist || data.allArtistNames?.[0] || '');
+      const foundArtistNames = Array.isArray(data.allArtistNames) && data.allArtistNames.length ? data.allArtistNames : [data.artist].filter(Boolean);
+      const cleanFoundArtistNames = Array.from(new Set(foundArtistNames.map((name: string) => normalizeArtistName(String(name))).filter(Boolean)));
+      setArtistName(cleanFoundArtistNames[0] || '');
+      setSelectedArtistNames(cleanFoundArtistNames);
       setTitle(data.title || '');
       setReleaseYear(data.year ? String(data.year) : '');
       setEditionDate(data.year ? String(data.year) : '');
@@ -2321,7 +2503,7 @@ function DiscogsImportPage() {
       setOriginalYear(data.originalYear ? String(data.originalYear) : (data.year ? String(data.year) : ''));
       setImageUrl(data.coverImage || data.thumb || '');
       setDiscogsUrl(data.discogsUrl || '');
-      setAllArtistNames(Array.isArray(data.allArtistNames) ? data.allArtistNames : []);
+      setAllArtistNames(cleanFoundArtistNames);
       setOrchestra(data.orchestra || '');
       setConductor(data.conductor || '');
       setProducer(data.producer || '');
@@ -2362,12 +2544,19 @@ function DiscogsImportPage() {
   };
 
   const saveApprovedImport = async () => {
-    if (!artistName.trim() || !title.trim()) {
-      alert('Faltan nombre del artista y/o título del álbum.');
+    const artistsToSave = Array.from(new Set(selectedArtistNames.map(normalizeArtistName).filter(Boolean)));
+    const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
+
+    if (!mainArtistName || artistsToSave.length === 0 || !title.trim()) {
+      alert('Faltan artista(s) y/o título del álbum.');
       return;
     }
 
-    const approved = window.confirm('¿Guardar definitivamente este artista y este álbum en la base de datos?');
+    if (!artistsToSave.some((name) => name.toLowerCase() === mainArtistName.toLowerCase())) {
+      artistsToSave.unshift(mainArtistName);
+    }
+
+    const approved = window.confirm(`¿Guardar definitivamente este álbum en la base de datos y vincularlo a: ${artistsToSave.join(', ')}?`);
     if (!approved) return;
 
     setSaving(true);
@@ -2378,30 +2567,18 @@ function DiscogsImportPage() {
         return;
       }
 
-      const mainArtistId = slugifyArtistId(artistName);
-      const mainArtistRef = doc(db, 'artists', mainArtistId);
-      const mainArtistSnap = await getDoc(mainArtistRef);
+      const mainArtistId = slugifyArtistId(mainArtistName);
+      const resolvedArtistIds: string[] = [];
+      let createdNewArtist = false;
 
-      if (!mainArtistSnap.exists()) {
-        await setDoc(mainArtistRef, {
-          name: artistName.trim(),
-          genre,
-          imageUrl: '',
-          biography: '',
-          instruments: [],
-          periods: [],
-        });
-      }
-
-      const resolvedArtistIds: string[] = [mainArtistId];
-      const extraNames = allArtistNames.filter((name) => name && name.trim() && name.trim() !== artistName.trim());
-      for (const name of extraNames) {
-        const extraArtistId = slugifyArtistId(name);
-        const extraRef = doc(db, 'artists', extraArtistId);
-        const extraSnap = await getDoc(extraRef);
-        if (!extraSnap.exists()) {
-          await setDoc(extraRef, {
-            name: name.trim(),
+      for (const name of artistsToSave) {
+        const artistId = slugifyArtistId(name);
+        const artistRef = doc(db, 'artists', artistId);
+        const artistSnap = await getDoc(artistRef);
+        if (!artistSnap.exists()) {
+          createdNewArtist = true;
+          await setDoc(artistRef, {
+            name,
             genre,
             imageUrl: '',
             biography: '',
@@ -2409,14 +2586,14 @@ function DiscogsImportPage() {
             periods: [],
           });
         }
-        resolvedArtistIds.push(extraArtistId);
+        resolvedArtistIds.push(artistId);
       }
 
-      const albumId = slugifyAlbumId(artistName, title, releaseYear, catalogNumber);
+      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber);
       const albumRef = doc(db, 'albums', albumId);
       await setDoc(albumRef, {
         artistId: mainArtistId,
-        artistName: artistName.trim(),
+        artistName: mainArtistName,
         allArtistIds: Array.from(new Set(resolvedArtistIds)),
         title: title.trim(),
         genre,
@@ -2451,7 +2628,11 @@ function DiscogsImportPage() {
       }
 
       alert('Guardado correctamente.');
-      navigate(`/artist/${mainArtistId}`);
+      if (createdNewArtist) {
+        navigate(`/artist/${mainArtistId}`);
+      } else {
+        resetDiscogsImportForm();
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'discogs-import');
       alert('No se pudo guardar. Revisa la consola para ver el error exacto.');
@@ -2496,7 +2677,53 @@ function DiscogsImportPage() {
             </div>
 
             <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="Artista principal" value={artistName} setValue={setArtistName} />
+              <div className="md:col-span-2 rounded-2xl border border-ink/10 bg-ink/[0.02] p-5 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Artista principal</label>
+                  <select value={artistName} onChange={(e) => setArtistName(e.target.value)} className="w-full bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
+                    <option value="">Seleccionar artista principal</option>
+                    {selectedArtistNames.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-ink/50">El artista principal define a qué página irás después de guardar. El álbum también quedará vinculado a todos los artistas seleccionados.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Artistas donde se guardará este álbum</label>
+                  {selectedArtistNames.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedArtistNames.map((name) => (
+                        <span key={name} className="inline-flex items-center gap-2 rounded-full bg-gold/10 border border-gold/20 px-3 py-2 text-sm text-ink/80">
+                          {name}
+                          <button type="button" onClick={() => removeSelectedArtist(name)} className="text-ink/40 hover:text-red-600" aria-label={`Quitar ${name}`}>
+                            <X size={14} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-ink/50">Todavía no hay artistas seleccionados.</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="flex gap-2">
+                    <select value={artistToAdd} onChange={(e) => setArtistToAdd(e.target.value)} className="flex-1 bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
+                      <option value="">Agregar artista existente</option>
+                      {existingArtists.map((artist) => (
+                        <option key={artist.id} value={artist.name}>{artist.name}</option>
+                      ))}
+                    </select>
+                    <button type="button" onClick={addExistingArtist} disabled={!artistToAdd} className="px-4 py-3 rounded-xl bg-ink text-paper text-xs font-bold uppercase tracking-widest disabled:opacity-40">Agregar</button>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <input value={manualArtistName} onChange={(e) => setManualArtistName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManualArtist(); } }} className="flex-1 bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold" placeholder="Nuevo artista manual" />
+                    <button type="button" onClick={addManualArtist} disabled={!manualArtistName.trim()} className="px-4 py-3 rounded-xl bg-ink text-paper text-xs font-bold uppercase tracking-widest disabled:opacity-40">Agregar</button>
+                  </div>
+                </div>
+              </div>
               <Field label="Título del álbum" value={title} setValue={setTitle} />
               <div className="space-y-2">
                 <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Género detectado</label>
@@ -2532,9 +2759,9 @@ function DiscogsImportPage() {
             </div>
           </div>
 
-          {allArtistNames.length > 1 && (
+          {allArtistNames.length > 0 && (
             <div className="rounded-2xl bg-gold/5 border border-gold/10 p-5 text-sm text-ink/70">
-              Artistas encontrados en Discogs: {allArtistNames.join(', ')}. Si no existen, también se crearán y el álbum quedará vinculado a ellos.
+              Discogs encontró: {allArtistNames.join(', ')}. Puedes dejar esos artistas, quitarlos, agregar artistas existentes o escribir nuevos antes de guardar.
             </div>
           )}
 
