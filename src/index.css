@@ -43,3 +43,26 @@
 @media (hover: none), (pointer: coarse) {
   .album-card-actions { transform: none !important; }
 }
+
+
+/* Optional comfortable reading mode. Kept opt-in so the original design is unchanged. */
+html.reader-mode main .text-xs,
+html.reader-mode main [class*="text-[10px]"] {
+  font-size: 0.875rem !important;
+  line-height: 1.55 !important;
+  letter-spacing: 0.025em;
+}
+html.reader-mode main .text-sm {
+  font-size: 1rem !important;
+  line-height: 1.65 !important;
+}
+html.reader-mode main input,
+html.reader-mode main select,
+html.reader-mode main textarea,
+html.reader-mode main button {
+  font-size: max(1rem, 1em);
+}
+html.reader-mode main p,
+html.reader-mode main li {
+  overflow-wrap: anywhere;
+}
