@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
@@ -302,56 +303,145 @@ function Footer() {
 
 // --- Pages ---
 
-function RecordLabelCleanup() {
+function CatalogMaintenance() {
   const { canAccess } = useAuth();
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState('');
-  const cleanExistingLabels = async () => {
-    if (running || !window.confirm('¿Corregir sellos repetidos en todos los álbumes? No se modificarán otros datos.')) return;
+  const [report, setReport] = useState<ReturnType<typeof inspectCatalog> | null>(null);
+  const [message, setMessage] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [backupDownloaded, setBackupDownloaded] = useState(false);
+
+  const loadCatalog = async () => {
+    const [artistDocs, albumDocs, collectionDocs, jobDocs] = await Promise.all([
+      getDocs(collection(db, 'artists')),
+      getDocs(collection(db, 'albums')),
+      getDocs(collection(db, 'collection')),
+      getDocs(collection(db, 'import_jobs'))
+    ]);
+    return {
+      artists: artistDocs.docs.map(item => ({ ...item.data(), id: item.id } as Artist)),
+      albums: albumDocs.docs.map(item => ({ ...item.data(), id: item.id } as Album)),
+      collection: collectionDocs.docs.map(item => ({ ...item.data(), id: item.id } as CollectionItem)),
+      import_jobs: jobDocs.docs.map(item => ({ ...item.data(), id: item.id } as Record<string, unknown>)),
+    };
+  };
+
+  const downloadBackup = async () => {
+    if (running) return;
     setRunning(true);
-    setResult('Revisando álbumes...');
-    let corrected = 0;
-    let failed = 0;
+    setMessage('Preparando copia de seguridad...');
+    try {
+      const data = await loadCatalog();
+      const json = serializeCatalogBackup({
+        format: 'musica-elegante-backup',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        description: 'Copia de metadatos Firestore; los archivos de Firebase Storage no están incluidos.',
+        ...data,
+      });
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'musica-elegante-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setBackupDownloaded(true);
+      setMessage(`Archivo JSON preparado: ${data.artists.length} artistas y ${data.albums.length} álbumes. Guarda una copia segura.`);
+    } catch (error) {
+      console.error('Backup failed', error);
+      setMessage('No se pudo exportar todo el catálogo. Comprueba la conexión y los permisos.');
+    } finally { setRunning(false); }
+  };
+
+  const inspect = async () => {
+    if (running) return;
+    setRunning(true);
+    setMessage('Analizando integridad del catálogo...');
+    try {
+      const data = await loadCatalog();
+      const issues = inspectCatalog(data.albums, data.artists);
+      setReport(issues);
+      setPreviewOpen(true);
+      setMessage(`Se revisaron ${data.albums.length} álbumes y ${data.artists.length} artistas; ${issues.length} observaciones para revisión. No se modificó nada.`);
+    } catch (error) {
+      console.error('Catalog audit failed', error);
+      setMessage('No se pudo completar la revisión. No se modificó ningún registro.');
+    } finally { setRunning(false); }
+  };
+
+  const fixRepeatedLabels = async () => {
+    if (!backupDownloaded || running) return;
+    if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
+    setRunning(true);
     try {
       const snapshot = await getDocs(collection(db, 'albums'));
-      for (const albumDoc of snapshot.docs) {
-        const data = albumDoc.data();
+      let fixed = 0;
+      let failed = 0;
+      for (const item of snapshot.docs) {
         const changes: Record<string, string> = {};
-        for (const field of ['label', 'originalLabel']) {
-          const value = data[field];
-          if (typeof value === 'string') {
-            const normalized = normalizeRecordLabels(value);
-            if (normalized !== value) changes[field] = normalized;
+        for (const field of ['label', 'originalLabel'] as const) {
+          const value = item.data()[field];
+          if (typeof value === 'string' && normalizeRecordLabels(value) !== value) {
+            changes[field] = normalizeRecordLabels(value);
           }
         }
-        if (Object.keys(changes).length) {
-          try {
-            await updateDoc(albumDoc.ref, changes);
-            corrected++;
-          } catch (error) {
-            failed++;
-            console.error('Error correcting album:', albumDoc.id, error);
-          }
-        }
+        if (!Object.keys(changes).length) continue;
+        try { await updateDoc(item.ref, changes); fixed++; }
+        catch (error) { console.error('Could not correct labels', item.id, error); failed++; }
       }
-      setResult(`Listo: ${corrected} álbumes corregidos; ${failed} errores.`);
+      setReport(null);
+      setPreviewOpen(false);
+      setMessage(`Se corrigieron ${fixed} álbumes. Errores: ${failed}. Los demás datos no cambiaron.`);
     } catch (error) {
-      console.error('Could not review albums:', error);
-      setResult('No se pudo acceder a los álbumes. Revisa los permisos.');
-    } finally {
-      setRunning(false);
-    }
+      console.error('Label correction failed', error);
+      setMessage('No se pudo completar la corrección. Revisa tus permisos.');
+    } finally { setRunning(false); }
   };
+
   if (!canAccess) return null;
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 border border-gold/30 rounded-2xl flex flex-wrap items-center gap-3">
-      <span className="text-sm">Mantenimiento de sellos discográficos</span>
-      <button type="button" onClick={cleanExistingLabels} disabled={running}
-        className="rounded-full bg-ink text-paper px-5 py-2 text-sm disabled:opacity-50">
-        {running ? 'Corrigiendo...' : 'Corregir sellos repetidos'}
-      </button>
-      {result && <span role="status" className="text-sm">{result}</span>}
-    </div>
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 space-y-3" aria-label="Mantenimiento y copias de seguridad">
+      <div className="rounded-2xl border border-gold/30 bg-white p-4 sm:p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="font-serif text-xl">Seguridad e integridad del catálogo</h2>
+            <p className="text-sm text-ink/60">Exportar los datos o revisar posibles inconsistencias sin eliminar registros.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={downloadBackup} disabled={running} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-50">Descargar copia JSON</button>
+            <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
+            <button type="button" onClick={fixRepeatedLabels} disabled={running || !backupDownloaded}
+              title={backupDownloaded ? 'Corregir sellos repetidos' : 'Descarga primero una copia de seguridad'}
+              className="rounded-full border border-gold/50 text-gold px-4 py-3 text-sm disabled:opacity-40">
+              Corregir sellos repetidos
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
+        {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
+        {previewOpen && report !== null && (
+          <div className="space-y-3 border-t border-ink/10 pt-3">
+            <div className="flex justify-between items-center gap-3">
+              <h3 className="font-medium text-sm">Observaciones ({report.length})</h3>
+              <button type="button" className="underline text-sm" onClick={() => setPreviewOpen(false)}>Ocultar</button>
+            </div>
+            {report.length === 0 ? <p className="text-sm text-ink/60">No se detectaron problemas con estas comprobaciones.</p> : (
+              <div className="max-h-72 overflow-y-auto divide-y divide-ink/10 border border-ink/10 rounded-xl">
+                {report.slice(0, 150).map((issue, index) => (
+                  <div key={issue.albumId + issue.kind + index} className="p-3 text-sm">
+                    <strong>{issue.title}</strong> — {issue.detail}
+                  </div>
+                ))}
+                {report.length > 150 && <p className="p-3 text-sm text-ink/60">Se muestran las primeras 150 observaciones.</p>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -369,7 +459,7 @@ function Home() {
 
   return (
     <div className="space-y-20">
-      <RecordLabelCleanup />
+      <CatalogMaintenance />
       <section className="relative h-[80vh] flex items-center justify-center overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img 
@@ -1568,118 +1658,15 @@ const SEED_DATA: { artist: Partial<Artist>, albums: Partial<Album>[] }[] = [
   },
 ];
 
-function SeedButton() {
-  const [loading, setLoading] = useState(false);
-
-  const seed = async () => {
-    setLoading(true);
-    try {
-      for (const data of SEED_DATA) {
-        const artistId = slugifyArtistId(data.artist.name || 'artist');
-        await setDoc(doc(db, 'artists', artistId), data.artist, { merge: true });
-        for (const albumData of data.albums) {
-          await addDoc(collection(db, 'albums'), { ...albumData, artistId, artistName: data.artist.name });
-        }
-      }
-      alert('Datos iniciales cargados con éxito.');
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <button 
-      onClick={seed}
-      disabled={loading}
-      className="fixed bottom-4 right-4 p-2 bg-gold text-white rounded-full shadow-lg z-[200] hover:scale-110 transition-transform"
-      title="Cargar datos iniciales (Solo Admin)"
-    >
-      <Plus size={20} />
-    </button>
-  );
-}
-
-function CleanupButton() {
-  const [loading, setLoading] = useState(false);
-
-  const cleanup = async () => {
-    setLoading(true);
-    try {
-      // Cleanup Artists
-      const artistsSnapshot = await getDocs(collection(db, 'artists'));
-      const artists = artistsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Artist));
-      const artistGroups: { [key: string]: string[] } = {};
-
-      artists.forEach(artist => {
-        const key = `${artist.name.toLowerCase().trim()}_${artist.genre}`;
-        if (!artistGroups[key]) {
-          artistGroups[key] = [];
-        }
-        artistGroups[key].push(artist.id);
-      });
-
-      for (const key in artistGroups) {
-        const ids = artistGroups[key];
-        if (ids.length > 1) {
-          // Keep the first one, delete the rest
-          for (let i = 1; i < ids.length; i++) {
-            await deleteDoc(doc(db, 'artists', ids[i]));
-          }
-        }
-      }
-
-      // Cleanup Albums
-      const albumsSnapshot = await getDocs(collection(db, 'albums'));
-      const albums = albumsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Album));
-      const albumGroups: { [key: string]: string[] } = {};
-
-      albums.forEach(album => {
-        const key = `${album.title.toLowerCase().trim()}_${album.artistId}`;
-        if (!albumGroups[key]) {
-          albumGroups[key] = [];
-        }
-        albumGroups[key].push(album.id);
-      });
-
-      for (const key in albumGroups) {
-        const ids = albumGroups[key];
-        if (ids.length > 1) {
-          // Keep the first one, delete the rest
-          for (let i = 1; i < ids.length; i++) {
-            await deleteDoc(doc(db, 'albums', ids[i]));
-          }
-        }
-      }
-
-      alert('Duplicados eliminados correctamente.');
-    } catch (error) {
-      console.error('Error al limpiar duplicados:', error);
-      alert('Error al limpiar duplicados.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <button 
-      onClick={cleanup}
-      disabled={loading}
-      className="fixed bottom-4 right-16 p-2 bg-red-500 text-white rounded-full shadow-lg z-[200] hover:scale-110 transition-transform disabled:opacity-50"
-      title="Limpiar Duplicados"
-    >
-      <Trash2 size={20} />
-    </button>
-  );
-}
-
-
 function SearchPage() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState<'year' | 'artist' | 'title' | 'label'>('year');
   const [genreFilter, setGenreFilter] = useState<'all' | Genre>('all');
+  const [formatFilter, setFormatFilter] = useState('all');
+  const [labelFilter, setLabelFilter] = useState('all');
+  const [yearFrom, setYearFrom] = useState('');
+  const [yearTo, setYearTo] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => {
@@ -1690,11 +1677,22 @@ function SearchPage() {
     return unsubscribe;
   }, []);
 
-  const normalizedQuery = searchText.trim().toLowerCase();
+  const normalizeSearch = (value: unknown) => String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
+  const normalizedQuery = normalizeSearch(searchText);
+  const availableLabels = Array.from(new Set<string>(albums.flatMap(album =>
+    normalizeRecordLabels(album.label).split(',').map(value => value.trim()).filter(Boolean))))
+    .sort((a, b) => a.localeCompare(b));
+  const availableFormats = Array.from(new Set(albums.flatMap(album => album.formats || []))).sort();
 
   const filteredAlbums = [...albums]
     .filter((album) => {
       if (genreFilter !== 'all' && album.genre !== genreFilter) return false;
+      if (formatFilter !== 'all' && !(album.formats || []).includes(formatFilter as 'CD' | 'Vinilo' | 'DVD' | 'Bluray')) return false;
+      if (labelFilter !== 'all' && !normalizeRecordLabels(album.label).split(',').some(value => normalizeSearch(value) === normalizeSearch(labelFilter))) return false;
+      const year = Number(album.releaseYear);
+      if (yearFrom && (!year || year < Number(yearFrom))) return false;
+      if (yearTo && (!year || year > Number(yearTo))) return false;
       if (!normalizedQuery) return true;
 
       const searchableValues = [
@@ -1717,12 +1715,23 @@ function SearchPage() {
         ...(album.formats || []),
         ...(album.musicians || []).flatMap((m) => [m.name, m.instrument, m.notes || '']),
         ...(album.soloists || []).flatMap((s) => [s.name, s.instrument, s.birthPlace || '', s.deathPlace || '']),
+        ...(album.tracks || []).flatMap(track => [track.title, track.orchestra || '', track.conductor || '', ...(track.soloists || []).map(soloist => soloist.name)]),
+        ...(album.discs || []).flatMap(disc => [
+          disc.title || '',
+          ...(disc.works || []).flatMap(work => [
+            work.title, work.composer || '', work.orchestra || '', work.conductor || '',
+            ...(work.soloists || []).map(soloist => soloist.name),
+            ...(work.movements || []).flatMap(movement => [
+              movement.title, movement.orchestra || '', movement.conductor || '',
+              ...(movement.soloists || []).map(soloist => soloist.name)
+            ])
+          ])
+        ]),
       ]
         .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-      return searchableValues.includes(normalizedQuery);
+        .join(' ');
+      const searchable = normalizeSearch(searchableValues);
+      return normalizedQuery.split(/\s+/).every(word => searchable.includes(word));
     })
     .sort((a, b) => {
       if (sortBy === 'year') return Number(a.releaseYear || 0) - Number(b.releaseYear || 0);
@@ -1742,7 +1751,7 @@ function SearchPage() {
       </div>
 
       <div className="rounded-3xl border border-ink/10 bg-white p-5 md:p-6 shadow-sm space-y-5">
-        <div className="grid grid-cols-1 lg:grid-cols-[1.5fr,0.75fr,0.75fr] gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[1.5fr_0.75fr_0.75fr] gap-4">
           <input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
@@ -1770,10 +1779,39 @@ function SearchPage() {
           </select>
         </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Sello discográfico
+            <select value={labelFilter} onChange={e => setLabelFilter(e.target.value)}
+              className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
+              <option value="all">Todos los sellos</option>
+              {availableLabels.map(label => <option key={label} value={label}>{label}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Formato
+            <select value={formatFilter} onChange={e => setFormatFilter(e.target.value)}
+              className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
+              <option value="all">Todos los formatos</option>
+              {availableFormats.map(format => <option key={format} value={format}>{format}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Año desde
+            <input type="number" inputMode="numeric" min="1000" max="2100" placeholder="Ej. 1950"
+              value={yearFrom} onChange={e => setYearFrom(e.target.value)}
+              className="w-full bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none" />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Año hasta
+            <input type="number" inputMode="numeric" min="1000" max="2100" placeholder="Ej. 2000"
+              value={yearTo} onChange={e => setYearTo(e.target.value)}
+              className="w-full bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none" />
+          </label>
+        </div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <p className="text-sm text-ink/50">
             {filteredAlbums.length} resultado{filteredAlbums.length === 1 ? '' : 's'}
           </p>
+          <button type="button" className="text-xs underline text-ink/60" onClick={() => {
+            setSearchText(''); setGenreFilter('all'); setFormatFilter('all'); setLabelFilter('all'); setYearFrom(''); setYearTo('');
+          }}>Limpiar filtros</button>
           <div className="flex bg-ink/5 p-1 rounded-full w-fit">
             <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-full", viewMode === 'grid' ? "bg-paper text-gold" : "text-ink/40")}>
               <LayoutGrid size={18} />
@@ -3693,6 +3731,9 @@ try {
 
 function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album: Album, onClose: () => void, onEdit: () => void, highlightArtistId?: string }) {
   const [artistName, setArtistName] = useState<string>(album.artistName || '');
+  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0);
+  const classicalMovementCount = (album.discs || []).reduce((total, disc) =>
+    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0);
 
   useEffect(() => {
     if (!artistName) {
@@ -3719,11 +3760,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row"
+        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row min-w-0" role="dialog" aria-modal="true" aria-label={`Detalles del álbum: ${album.title}`}
       >
         <button type="button" onClick={onClose} aria-label="Cerrar detalles del álbum" className="md:hidden sticky top-3 self-end mr-3 -mb-12 z-30 w-11 h-11 flex items-center justify-center bg-paper/95 rounded-full shadow-md text-ink"><X size={22} /></button>
         {/* Left Side: Cover & Basic Info */}
-        <div className="w-full md:w-2/5 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
+        <div className="w-full md:w-2/5 min-w-0 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
           <div className="w-40 sm:w-full max-w-full aspect-square rounded-2xl overflow-hidden shadow-lg sm:shadow-2xl bg-ink/10 mx-auto">
             {album.imageUrl ? (
               <img src={album.imageUrl} alt={album.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -3740,7 +3781,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               <p className="text-gold font-bold uppercase tracking-widest text-sm">{artistName}</p>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 pt-4">
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-4 pt-4">
               {album.releaseYear && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Lanzamiento</span>
@@ -3765,7 +3806,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.originalLabel && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original</span>
-                  <p className="text-sm font-medium">{normalizeRecordLabels(album.originalLabel)}</p>
+                  <p className="text-sm font-medium break-words">{normalizeRecordLabels(album.originalLabel)}</p>
                 </div>
               )}
               {album.originalYear && (
@@ -3777,7 +3818,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.label && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello</span>
-                  <p className="text-sm font-medium">{normalizeRecordLabels(album.label)}</p>
+                  <p className="text-sm font-medium break-words">{normalizeRecordLabels(album.label)}</p>
                 </div>
               )}
               {album.catalogNumber && (
@@ -3942,6 +3983,27 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
             </div>
           )}
 
+          {album.genre === 'classical' && classicalWorkCount > 0 && (
+            <div className="rounded-2xl border border-gold/20 bg-gold/5 p-4 space-y-2">
+              <h3 className="font-serif text-lg">Índice de la grabación</h3>
+              <div className="flex flex-wrap gap-2 text-xs font-semibold text-ink/60">
+                <span className="rounded-full bg-white px-3 py-1">{(album.discs || []).length} discos</span>
+                <span className="rounded-full bg-white px-3 py-1">{classicalWorkCount} obras</span>
+                <span className="rounded-full bg-white px-3 py-1">{classicalMovementCount} movimientos</span>
+              </div>
+              <div className="space-y-1">
+                {(album.discs || []).flatMap((disc, discIndex) =>
+                  (disc.works || []).map((work, workIndex) => (
+                    <button type="button" key={discIndex + '-' + workIndex}
+                       onClick={() => document.getElementById('work-' + discIndex + '-' + workIndex)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+                       className="block w-full text-left rounded-lg px-2 py-2 text-sm hover:bg-white focus-visible:outline focus-visible:outline-gold">
+                      <span className="text-gold font-bold">Disco {disc.discNumber} · </span>{work.title}
+                    </button>
+                  )))}
+              </div>
+            </div>
+          )}
+
           {/* Tracks / Works Hierarchy */}
           {((album.tracks && album.tracks.length > 0) || (album.discs && album.discs.length > 0)) && (
             <div className="space-y-6">
@@ -3962,11 +4024,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                           Disco {disc.discNumber}{disc.title ? `: ${disc.title}` : ''}
                         </span>
                       </div>
-                      <div className="space-y-6 pl-4">
+                      <div className="space-y-6 pl-1 sm:pl-4">
                         {disc.works.map((work, wIdx) => {
                         const isHighlighted = highlightArtistId && Array.isArray((work as any).trackArtists) && (work as any).trackArtists.includes(highlightArtistId);
                         return (
-                          <div key={wIdx} className={cn("space-y-3 rounded-xl p-3 -mx-3 transition-colors", isHighlighted ? "bg-gold/10 border border-gold/30" : "")}>
+                          <div key={wIdx} id={'work-' + dIdx + '-' + wIdx} className={cn("space-y-3 rounded-xl p-3 -mx-3 transition-colors scroll-mt-20", isHighlighted ? "bg-gold/10 border border-gold/30" : "")}>
                             <div className="flex flex-col">
                               <span className={cn("text-sm font-bold", isHighlighted ? "text-gold" : "text-ink/90")}>{work.title}{isHighlighted && <span className="ml-2 text-[10px] uppercase tracking-widest font-bold text-gold/70">★ Grabación destacada</span>}</span>
                               {(work.orchestra || work.conductor || work.soloists?.length || work.foundationDate || work.foundationPlace || work.founderName || work.choirMaster) && (
@@ -4027,10 +4089,10 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                             <div className="space-y-1">
                               {work.movements.map((mov, mIdx) => (
                                 <React.Fragment key={mIdx}>
-                                  <div className="flex items-center gap-4 p-2 hover:bg-ink/5 rounded-lg transition-colors group">
+                                  <div className="flex items-start sm:items-center gap-2 sm:gap-4 p-2 hover:bg-ink/5 rounded-lg transition-colors group min-w-0">
                                     <span className="w-6 text-center text-[10px] font-bold text-ink/20 group-hover:text-gold">{mov.trackNumber}</span>
                                     {mov.side && <span className="text-[10px] font-bold text-gold/60 w-4">{mov.side}</span>}
-                                    <span className="flex-grow text-xs text-ink/70">{mov.title}</span>
+                                    <span className="flex-1 min-w-0 text-xs text-ink/70 break-words">{mov.title}</span>
                                     {mov.duration && <span className="text-[10px] text-ink/30 font-mono">{mov.duration}</span>}
                                   </div>
                                   {(mov.orchestra || mov.conductor || mov.soloists?.length || mov.foundationDate || mov.foundationPlace || mov.founderName || mov.choirMaster || mov.compositionDate || mov.compositionPlace) && (
