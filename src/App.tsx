@@ -2862,6 +2862,14 @@ function DiscogsImportPage() {
   const [producer, setProducer] = useState('');
   const [engineer, setEngineer] = useState('');
   const [masteringEngineer, setMasteringEngineer] = useState('');
+  const [releaseDate, setReleaseDate] = useState('');
+  const [recordingDates, setRecordingDates] = useState('');
+  const [location, setLocation] = useState('');
+  const [anecdotes, setAnecdotes] = useState('');
+  const [showArtistTools, setShowArtistTools] = useState(false);
+  const [showAdvancedDetails, setShowAdvancedDetails] = useState(false);
+  const [showTrackEditor, setShowTrackEditor] = useState(false);
+  const [importError, setImportError] = useState('');
   const [discCount, setDiscCount] = useState(1);
   const [formats, setFormats] = useState<('CD' | 'Vinilo' | 'DVD' | 'Bluray')[]>(['CD']);
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -2911,6 +2919,14 @@ function DiscogsImportPage() {
     setProducer('');
     setEngineer('');
     setMasteringEngineer('');
+    setReleaseDate('');
+    setRecordingDates('');
+    setLocation('');
+    setAnecdotes('');
+    setShowArtistTools(false);
+    setShowAdvancedDetails(false);
+    setShowTrackEditor(false);
+    setImportError('');
     setDiscCount(1);
     setFormats(['CD']);
     setTracks([]);
@@ -2969,6 +2985,7 @@ function DiscogsImportPage() {
 
     setLoading(true);
     setMessage('');
+    setImportError('');
     try {
       const param = searchMode === 'barcode'
         ? `barcode=${encodeURIComponent(value)}`
@@ -2981,12 +2998,20 @@ function DiscogsImportPage() {
       setGenre(detectedGenre);
       const foundArtistNames = Array.isArray(data.allArtistNames) && data.allArtistNames.length ? data.allArtistNames : [data.artist].filter(Boolean);
       const cleanFoundArtistNames = Array.from(new Set(foundArtistNames.map((name: string) => normalizeArtistName(String(name))).filter(Boolean)));
-      setArtistName(cleanFoundArtistNames[0] || '');
-      setSelectedArtistNames(cleanFoundArtistNames);
+      const primary = normalizeArtistName(String(data.primaryArtist || cleanFoundArtistNames[0] || ''));
+      setArtistName(primary);
+      setSelectedArtistNames(Array.from(new Set([primary, ...cleanFoundArtistNames].filter(Boolean))));
       setTitle(data.title || '');
       setReleaseYear(data.year ? String(data.year) : '');
       setEditionDate(data.year ? String(data.year) : '');
       setCountry(data.country || '');
+      setReleaseDate(data.releaseDate || '');
+      setRecordingDates('');
+      setLocation('');
+      setAnecdotes('');
+      setShowArtistTools(false);
+      setShowAdvancedDetails(false);
+      setShowTrackEditor(false);
       const labelOptions = getDiscogsLabelOptions(data.label);
       setDiscogsLabelOptions(labelOptions);
       const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
@@ -3015,7 +3040,7 @@ function DiscogsImportPage() {
       setMessage(`Datos cargados desde Discogs. Género detectado: ${detectedGenre === 'classical' ? 'Música Clásica' : 'Jazz'}. Revisa y edita antes de guardar.`);
     } catch (error: any) {
       console.error('Discogs import error:', error);
-      alert(error.message || 'No se pudo obtener información desde Discogs.');
+      setImportError(error.message || 'No se pudo obtener información desde Discogs.');
     } finally {
       setLoading(false);
     }
@@ -3039,16 +3064,17 @@ function DiscogsImportPage() {
   };
 
   const saveApprovedImport = async () => {
+    setImportError('');
     const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
 
     if (discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
-      alert('Selecciona el sello discográfico de tu edición antes de guardar.');
+      setImportError('Selecciona el sello discográfico de tu edición antes de guardar.');
       return;
     }
 
     if (!mainArtistName || artistsToSave.length === 0 || !title.trim()) {
-      alert('Faltan artista(s) y/o título del álbum.');
+      setImportError('Faltan artista(s) y/o título del álbum.');
       return;
     }
 
@@ -3100,6 +3126,10 @@ function DiscogsImportPage() {
         releaseYear,
         imageUrl,
         country,
+        releaseDate,
+        recordingDates,
+        location,
+        anecdotes,
         label: normalizeRecordLabels(label),
         catalogNumber,
         originalCatalogNumber,
@@ -3135,7 +3165,7 @@ function DiscogsImportPage() {
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'discogs-import');
-      alert('No se pudo guardar. Revisa la consola para ver el error exacto.');
+      setImportError('No se pudo guardar: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setSaving(false);
     }
@@ -3145,9 +3175,9 @@ function DiscogsImportPage() {
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-16 space-y-8 sm:space-y-10">
       <div className="space-y-4">
         <span className="text-xs uppercase tracking-widest font-bold text-gold">Importación Discogs</span>
-        <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl italic leading-tight break-words">Agregar álbum por catálogo o barcode</h1>
+        <h1 className="font-serif text-4xl sm:text-5xl italic leading-tight break-words">Agregar un álbum</h1>
         <p className="text-ink/60 max-w-3xl leading-relaxed">
-          Busca el release en Discogs, revisa todos los datos encontrados, edita lo que quieras y recién después aprueba el guardado final. Si el artista no existe, se crea primero; si ya existe, el álbum queda en su página.
+          1. Busca el disco · 2. Confirma su edición · 3. Revisa las pistas y guarda. El artista principal y los datos disponibles se completan automáticamente.
         </p>
       </div>
 
@@ -3162,7 +3192,8 @@ function DiscogsImportPage() {
             {loading ? 'Buscando...' : 'Buscar en Discogs'}
           </button>
         </div>
-        {message && <p className="text-sm text-gold font-medium">{message}</p>}
+        {message && <p role="status" className="text-sm text-gold font-medium">{message}</p>}
+        {importError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{importError}</p>}
         {discogsUrl && <a href={discogsUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-sm underline text-ink/60 hover:text-gold">Ver release en Discogs</a>}
       </div>
 
@@ -3177,52 +3208,56 @@ function DiscogsImportPage() {
             </div>
 
             <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2 rounded-2xl border border-ink/10 bg-ink/[0.02] p-5 space-y-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Artista principal</label>
-                  <select value={artistName} onChange={(e) => setArtistName(e.target.value)} className="w-full bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
-                    <option value="">Seleccionar artista principal</option>
-                    {selectedArtistNames.map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-ink/50">El artista principal define a qué página irás después de guardar. El álbum también quedará vinculado a todos los artistas seleccionados.</p>
+              <div className="md:col-span-2 rounded-2xl border border-ink/10 bg-ink/[0.03] p-4 sm:p-5 min-w-0 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] uppercase tracking-widest font-bold text-gold">Artista principal · Automático</p>
+                    <p className="font-serif text-xl mt-1 break-words">{artistName || 'No identificado'}</p>
+                    <p className="text-xs text-ink/50 mt-1">{selectedArtistNames.length} artista(s) vinculados. Los perfiles que falten se crean al guardar.</p>
+                  </div>
+                  <button type="button" onClick={() => setShowArtistTools(value => !value)}
+                    className="shrink-0 rounded-full border border-ink/15 px-4 py-2 text-xs font-bold hover:bg-white">
+                    {showArtistTools ? 'Cerrar' : 'Corregir artistas'}
+                  </button>
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Artistas donde se guardará este álbum</label>
-                  {selectedArtistNames.length > 0 ? (
+                {showArtistTools && (
+                  <div className="space-y-4 pt-3 border-t border-ink/10">
+                    <div className="space-y-1">
+                      <label className="text-xs text-ink/60">Artista principal</label>
+                      <select value={artistName} onChange={e => setArtistName(e.target.value)}
+                        className="w-full min-w-0 rounded-xl bg-white px-3 py-3">
+                        <option value="">Selecciona un artista</option>
+                        {selectedArtistNames.map(name => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    </div>
                     <div className="flex flex-wrap gap-2">
-                      {selectedArtistNames.map((name) => (
-                        <span key={name} className="inline-flex items-center gap-2 rounded-full bg-gold/10 border border-gold/20 px-3 py-2 text-sm text-ink/80">
-                          {name}
-                          <button type="button" onClick={() => removeSelectedArtist(name)} className="text-ink/40 hover:text-red-600" aria-label={`Quitar ${name}`}>
-                            <X size={14} />
-                          </button>
+                      {selectedArtistNames.map(name => (
+                        <span key={name} className="inline-flex max-w-full items-center gap-2 rounded-full bg-white px-3 py-2 text-xs">
+                          <span className="truncate">{name}</span>
+                          <button type="button" onClick={() => removeSelectedArtist(name)} aria-label={`Quitar ${name}`}><X size={14}/></button>
                         </span>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-sm text-ink/50">Todavía no hay artistas seleccionados.</p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="flex gap-2">
-                    <select value={artistToAdd} onChange={(e) => setArtistToAdd(e.target.value)} className="flex-1 bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
-                      <option value="">Agregar artista existente</option>
-                      {existingArtists.map((artist) => (
-                        <option key={artist.id} value={artist.name}>{artist.name}</option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={addExistingArtist} disabled={!artistToAdd} className="px-4 py-3 rounded-xl bg-ink text-paper text-xs font-bold uppercase tracking-widest disabled:opacity-40">Agregar</button>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="flex min-w-0 gap-2">
+                        <select value={artistToAdd} onChange={e => setArtistToAdd(e.target.value)}
+                          className="flex-1 min-w-0 rounded-xl bg-white px-3 py-2 text-sm">
+                          <option value="">Artista existente</option>
+                          {existingArtists.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                        </select>
+                        <button type="button" onClick={addExistingArtist} disabled={!artistToAdd}
+                          className="shrink-0 rounded-xl bg-ink px-3 py-2 text-xs text-white disabled:opacity-30">Agregar</button>
+                      </div>
+                      <div className="flex min-w-0 gap-2">
+                        <input value={manualArtistName} onChange={e => setManualArtistName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManualArtist(); } }}
+                          className="flex-1 min-w-0 rounded-xl bg-white px-3 py-2 text-sm" placeholder="Nuevo artista (opcional)"/>
+                        <button type="button" onClick={addManualArtist} disabled={!manualArtistName.trim()}
+                          className="shrink-0 rounded-xl bg-ink px-3 py-2 text-xs text-white disabled:opacity-30">Agregar</button>
+                      </div>
+                    </div>
                   </div>
-
-                  <div className="flex gap-2">
-                    <input value={manualArtistName} onChange={(e) => setManualArtistName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManualArtist(); } }} className="flex-1 bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold" placeholder="Nuevo artista manual" />
-                    <button type="button" onClick={addManualArtist} disabled={!manualArtistName.trim()} className="px-4 py-3 rounded-xl bg-ink text-paper text-xs font-bold uppercase tracking-widest disabled:opacity-40">Agregar</button>
-                  </div>
-                </div>
+                )}
               </div>
               <Field label="Título del álbum" value={title} setValue={setTitle} />
               <div className="space-y-2">
