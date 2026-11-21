@@ -25,7 +25,12 @@
   body { overflow-x: hidden; }
   .mobile-dialog { min-height: 0; overscroll-behavior: contain; }
   .mobile-dialog input, .mobile-dialog select, .mobile-dialog textarea { font-size: 16px; min-width: 0; max-width: 100%; }
-  .mobile-dialog button { min-height: 40px; }
+  .mobile-dialog button { min-height: 44px; }
+  /* Recorded classical credits use many 10px labels: keep them legible on phones. */
+  .album-detail-dialog [class*="text-[10px]"] { font-size: 12px; line-height: 1.5; }
+  .album-detail-dialog .text-xs { font-size: 13px; line-height: 1.5; }
+  .album-card-actions button { min-height: 42px; min-width: 42px; }
+  .album-detail-dialog p { overflow-wrap: anywhere; }
   .classical-editor .grid.grid-cols-2, .classical-editor .grid.grid-cols-3 { grid-template-columns: minmax(0, 1fr); }
   .classical-editor .flex { min-width: 0; }
   .classical-editor .flex-grow { min-width: 0; }
