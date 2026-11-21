@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
@@ -2830,22 +2831,6 @@ function getDiscogsLabelOptions(value: unknown): string[] {
   return Array.from(new Set(values.map(value => String(value).trim()).filter(Boolean)));
 }
 
-type DiscogsEditionCandidate = {
-  id: number;
-  title: string;
-  year: string;
-  catno: string;
-  labels: string[];
-  formats: string[];
-};
-
-function discogsPhysicalFormat(value: string): 'CD' | 'Vinilo' | null {
-  const text = value.trim().toLowerCase();
-  if (/(^|\W)(cd|compact disc)(\W|$)/.test(text)) return 'CD';
-  if (/(vinyl|vinilo|\blp\b|\b12\x22\b|\b7\x22\b)/.test(text)) return 'Vinilo';
-  return null;
-}
-
 function DiscogsImportPage() {
   const navigate = useNavigate();
   const [searchMode, setSearchMode] = useState<'catno' | 'barcode'>('catno');
@@ -3056,10 +3041,7 @@ function DiscogsImportPage() {
       setMessage('Datos de Discogs cargados. Revisa la edición antes de guardar.');
   };
 
-  const matchingCandidates = editionCandidates.filter(candidate =>
-    candidate.labels.includes(editionLabel) &&
-    candidate.formats.some(format => discogsPhysicalFormat(format) === editionFormat)
-  );
+  const matchingCandidates = matchingDiscogsEditions(editionCandidates, editionLabel, editionFormat);
 
   const confirmEdition = async () => {
     const selectedId = editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '');
