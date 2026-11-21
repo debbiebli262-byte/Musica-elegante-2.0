@@ -1642,7 +1642,7 @@ function SearchPage() {
   }, []);
 
   const normalizeSearch = (value: unknown) => String(value || '')
-    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLocaleLowerCase().trim();
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
   const normalizedQuery = normalizeSearch(searchText);
   const availableLabels = Array.from(new Set(albums.flatMap(album =>
     normalizeRecordLabels(album.label).split(',').map(value => value.trim()).filter(Boolean))))
@@ -1695,7 +1695,7 @@ function SearchPage() {
         .filter(Boolean)
         .join(' ');
       const searchable = normalizeSearch(searchableValues);
-      return normalizedQuery.split(/\\s+/).every(word => searchable.includes(word));
+      return normalizedQuery.split(/\s+/).every(word => searchable.includes(word));
     })
     .sort((a, b) => {
       if (sortBy === 'year') return Number(a.releaseYear || 0) - Number(b.releaseYear || 0);
