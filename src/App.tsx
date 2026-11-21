@@ -194,7 +194,7 @@ function Navbar() {
   ];
 
   return (
-    <nav className="sticky top-0 z-50 bg-paper/90 backdrop-blur-md border-b border-ink/10 px-4 md:px-6 py-4">
+    <nav className="sticky top-0 z-50 bg-paper/95 backdrop-blur-md border-b border-ink/10 px-4 md:px-6 py-3 md:py-4">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
         <Link to="/" className="flex items-center gap-2 group min-w-0">
           <div className="w-10 h-10 rounded-full bg-ink flex items-center justify-center text-paper transition-transform group-hover:scale-110 shrink-0">
@@ -223,8 +223,9 @@ function Navbar() {
           type="button"
           onClick={() => setMobileMenuOpen((prev) => !prev)}
           className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded-full border border-ink/10 bg-paper text-ink hover:text-gold transition-colors"
-          aria-label="Abrir menú"
+          aria-label={mobileMenuOpen ? "Cerrar menú" : "Abrir menú"}
           aria-expanded={mobileMenuOpen}
+          aria-controls="mobile-navigation"
         >
           {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
@@ -236,7 +237,8 @@ function Navbar() {
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}
-            className="md:hidden max-w-7xl mx-auto mt-4 rounded-3xl border border-ink/10 bg-paper shadow-xl overflow-hidden"
+            id="mobile-navigation"
+            className="md:hidden absolute top-full inset-x-3 mt-2 rounded-2xl border border-ink/10 bg-paper shadow-xl overflow-hidden"
           >
             <div className="flex flex-col py-2">
               {navItems.map((item) => (
@@ -668,13 +670,13 @@ function GenrePage({ genre }: { genre: Genre }) {
   });
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-20 space-y-12">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-20 space-y-8 sm:space-y-12">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div className="space-y-4">
           <span className="text-xs uppercase tracking-widest font-bold text-gold">Explorar Género</span>
-          <h1 className="font-serif text-6xl md:text-8xl capitalize">{genre === 'classical' ? 'Música Clásica' : genre}</h1>
+          <h1 className="font-serif text-4xl sm:text-6xl md:text-8xl capitalize leading-tight break-words">{genre === 'classical' ? 'Música Clásica' : genre}</h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex bg-ink/5 p-1 rounded-full">
             <button 
               onClick={() => setViewMode('grid')}
@@ -707,7 +709,7 @@ function GenrePage({ genre }: { genre: Genre }) {
           </button>
           <button 
             onClick={() => setIsAdding(true)}
-            className="flex items-center gap-2 px-6 py-3 bg-ink text-paper rounded-full text-sm font-medium hover:bg-gold transition-colors"
+            className="flex items-center justify-center gap-2 px-5 sm:px-6 py-3 bg-ink text-paper rounded-full text-sm font-medium hover:bg-gold transition-colors min-h-11"
           >
             <Plus size={18} />
             <span>Añadir Artista</span>
@@ -897,8 +899,8 @@ function ArtistDetail() {
   };
 
   return (
-    <div className="space-y-20 pb-20">
-      <section className="relative h-[60vh] flex items-end px-6 pb-12 overflow-hidden">
+    <div className="space-y-12 sm:space-y-20 pb-12 sm:pb-20">
+      <section className="relative min-h-[340px] h-[48vh] md:h-[60vh] flex items-end px-4 sm:px-6 pb-8 md:pb-12 overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img
             src={artist.imageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=1920'}
@@ -914,7 +916,7 @@ function ArtistDetail() {
             <span className="text-xs uppercase tracking-widest font-bold text-gold">
               {artist.genre}
             </span>
-            <h1 className="font-serif text-6xl md:text-8xl tracking-tight">
+            <h1 className="font-serif text-4xl sm:text-6xl md:text-8xl tracking-tight leading-tight break-words">
               {artist.name}
             </h1>
           </div>
@@ -931,7 +933,7 @@ function ArtistDetail() {
         </div>
       </section>
 
-      <section className="max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-3 gap-20">
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 lg:grid-cols-3 gap-10 lg:gap-20">
         <div className="lg:col-span-2 space-y-12">
           {artist.biography && (
             <div className="space-y-6">
@@ -987,7 +989,7 @@ function ArtistDetail() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
               {albums.map((album) => (
                 <div key={album.id}>
                   <AlbumCard album={album} />
@@ -1007,7 +1009,7 @@ function ArtistDetail() {
               <h2 className="text-xs uppercase tracking-widest font-bold text-gold">
                 Colaboraciones (Sideman)
               </h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
                 {sidemanAlbums.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} />
@@ -1025,7 +1027,7 @@ function ArtistDetail() {
               <p className="text-sm text-ink/50 -mt-4">
                 Estos discos incluyen grabaciones de varios artistas. Las grabaciones de {artist?.name} están destacadas en dorado.
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
                 {sharedAlbums.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} highlightArtistId={id} />
@@ -1190,7 +1192,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
     return (
       <div 
         onClick={() => setIsViewing(true)}
-        className="group flex items-center gap-6 p-4 rounded-2xl hover:bg-ink/5 transition-colors cursor-pointer"
+        className="group flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-6 p-3 sm:p-4 rounded-2xl hover:bg-ink/5 transition-colors cursor-pointer"
       >
         <div className="w-16 h-16 rounded-xl overflow-hidden bg-ink/5 flex-shrink-0 shadow-sm">
           {album.imageUrl ? (
@@ -1212,7 +1214,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
             {artistName}{album.releaseYear && ` • ${album.releaseYear}`}{album.label && ` • ${album.label}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end sm:justify-start">
           <CollectionButton albumId={album.id} status="owned" currentStatus={status} />
           <CollectionButton albumId={album.id} status="wishlist" currentStatus={status} />
           <button 
@@ -1269,7 +1271,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
           </div>
         )}
         
-        <div className="absolute top-2 right-2 flex flex-col gap-2 translate-x-12 group-hover:translate-x-0 transition-transform duration-300">
+        <div className="album-card-actions absolute top-2 right-2 flex flex-col gap-2 md:translate-x-12 md:group-hover:translate-x-0 transition-transform duration-300">
           <CollectionButton albumId={album.id} status="owned" currentStatus={status} />
           <CollectionButton albumId={album.id} status="wishlist" currentStatus={status} />
           <button 
@@ -1293,8 +1295,8 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
         )}
       </div>
       <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
-        <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors">{album.title}</h4>
-        <div className="flex justify-between items-center">
+        <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors break-words">{album.title}</h4>
+        <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
           <p className="text-[10px] uppercase tracking-widest text-ink/60 font-bold truncate flex-1 mr-2">{artistName}</p>
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold whitespace-nowrap">
             {[album.releaseYear, album.label].filter(Boolean).join(' • ')}
@@ -1625,10 +1627,10 @@ function SearchPage() {
     });
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-16 md:py-20 space-y-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-20 space-y-8 sm:space-y-10">
       <div className="space-y-4">
         <span className="text-xs uppercase tracking-widest font-bold text-gold">Búsqueda avanzada</span>
-        <h1 className="font-serif text-5xl md:text-7xl leading-tight">Buscar grabaciones</h1>
+        <h1 className="font-serif text-4xl sm:text-5xl md:text-7xl leading-tight">Buscar grabaciones</h1>
         <p className="text-ink/65 max-w-3xl leading-relaxed">
           Localiza registros por artista, título, sello, número de catálogo, año, personal artístico y otros metadatos presentes en tu catálogo.
         </p>
@@ -2832,7 +2834,7 @@ function CollectionPage() {
   const renderAlbumGrid = (sectionItems: (CollectionItem & { album: Album })[]) => (
     <div className={cn(
       "grid gap-8",
-      viewMode === 'grid' ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-1"
+      viewMode === 'grid' ? "grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-1"
     )}>
       {sectionItems.map(item => (
         <div key={item.id}>
@@ -3161,7 +3163,7 @@ try {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -3173,14 +3175,14 @@ try {
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-2xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-y-auto"
+        className="mobile-dialog relative w-full max-w-2xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto"
       >
-        <div className="px-8 py-6 border-b border-ink/10 flex items-center justify-between">
+        <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-ink/10 flex items-center justify-between gap-3">
           <h2 className="font-serif text-3xl italic">{artist ? 'Editar Artista' : 'Nuevo Artista'}</h2>
           <button onClick={onClose} className="text-ink/40 hover:text-ink transition-colors"><X size={24} /></button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-8 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -3587,7 +3589,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
   }, [album.artistId, artistName]);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -3599,11 +3601,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-5xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
+        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row"
       >
         {/* Left Side: Cover & Basic Info */}
-        <div className="w-full md:w-2/5 bg-ink/5 p-8 flex flex-col gap-8 overflow-y-auto border-r border-ink/10 shrink-0">
-          <div className="aspect-square rounded-2xl overflow-hidden shadow-2xl bg-ink/10">
+        <div className="w-full md:w-2/5 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
+          <div className="w-40 sm:w-full max-w-full aspect-square rounded-2xl overflow-hidden shadow-lg sm:shadow-2xl bg-ink/10 mx-auto">
             {album.imageUrl ? (
               <img src={album.imageUrl} alt={album.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             ) : (
@@ -3615,7 +3617,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
           
           <div className="space-y-4">
             <div className="space-y-1">
-              <h2 className="font-serif text-4xl leading-tight">{album.title}</h2>
+              <h2 className="font-serif text-3xl sm:text-4xl leading-tight break-words">{album.title}</h2>
               <p className="text-gold font-bold uppercase tracking-widest text-sm">{artistName}</p>
             </div>
             
@@ -3738,7 +3740,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         </div>
 
         {/* Right Side: Details, Musicians, Tracks */}
-        <div className="flex-1 overflow-y-auto p-10 space-y-12">
+        <div className="flex-1 min-w-0 md:overflow-y-auto p-4 sm:p-8 lg:p-10 space-y-8 md:space-y-12">
           {/* Technical Details */}
           <div className="space-y-6">
             <div className="flex items-center gap-2 text-gold">
@@ -4537,7 +4539,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -4549,15 +4551,15 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-3xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+        className="mobile-dialog relative w-full max-w-3xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"
       >
-        <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
-          <div className="px-8 py-6 border-b border-ink/10 flex items-center justify-between bg-paper shrink-0">
+        <form onSubmit={handleSubmit} className="classical-editor flex flex-col h-full min-h-0 overflow-hidden">
+          <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-ink/10 flex items-center justify-between gap-3 bg-paper shrink-0">
             <h2 className="font-serif text-3xl italic">{album ? 'Editar Álbum' : 'Nuevo Álbum'}</h2>
             <button type="button" onClick={onClose} className="text-ink/40 hover:text-ink transition-colors"><X size={24} /></button>
           </div>
 
-          <div className="flex-grow overflow-y-auto p-8 space-y-10">
+          <div className="flex-grow min-h-0 overflow-y-auto p-4 sm:p-8 space-y-8 sm:space-y-10">
             {pendingComposers.length > 0 && (
               <div className="rounded-3xl border border-gold/30 bg-white p-6 space-y-4 shadow-sm">
                 <h3 className="font-serif text-2xl italic">
@@ -5711,7 +5713,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
             </div>
           </div>
 
-          <div className="sticky bottom-0 bg-paper px-8 py-6 border-t border-ink/10 flex items-center justify-between shrink-0">
+          <div className="mobile-dialog-footer sticky bottom-0 bg-paper px-4 sm:px-8 py-3 sm:py-6 border-t border-ink/10 flex flex-wrap items-center justify-between gap-3 shrink-0">
             {album && (
               <div className="flex items-center gap-4">
                 {isConfirmingDelete ? (
