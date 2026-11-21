@@ -1,3 +1,4 @@
+import { privateApiFetch } from './privateApi';
 export interface AlbumData {
   title: string;
   releaseYear: string;
@@ -10,7 +11,7 @@ export async function fetchArtistDiscography(
   _artistId: string,
   _genre: string
 ): Promise<AlbumData[]> {
-  const response = await fetch('/api/discography', {
+  const response = await privateApiFetch('/api/discography', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ artistName })
