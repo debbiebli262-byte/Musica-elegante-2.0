@@ -2830,6 +2830,22 @@ function getDiscogsLabelOptions(value: unknown): string[] {
   return Array.from(new Set(values.map(value => String(value).trim()).filter(Boolean)));
 }
 
+type DiscogsEditionCandidate = {
+  id: number;
+  title: string;
+  year: string;
+  catno: string;
+  labels: string[];
+  formats: string[];
+};
+
+function discogsPhysicalFormat(value: string): 'CD' | 'Vinilo' | null {
+  const text = value.trim().toLowerCase();
+  if (/(^|\W)(cd|compact disc)(\W|$)/.test(text)) return 'CD';
+  if (/(vinyl|vinilo|\blp\b|\b12\x22\b|\b7\x22\b)/.test(text)) return 'Vinilo';
+  return null;
+}
+
 function DiscogsImportPage() {
   const navigate = useNavigate();
   const [searchMode, setSearchMode] = useState<'catno' | 'barcode'>('catno');
@@ -3266,6 +3282,80 @@ function DiscogsImportPage() {
         {importError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{importError}</p>}
         {discogsUrl && <a href={discogsUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-sm underline text-ink/60 hover:text-gold">Ver release en Discogs</a>}
       </div>
+
+      {editionDialogOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-ink/70 p-3 sm:p-6">
+          <div role="dialog" aria-modal="true" aria-labelledby="edition-dialog-heading"
+            className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-3xl bg-paper p-5 sm:p-8 shadow-2xl space-y-5">
+            <div className="space-y-2">
+              <span className="text-xs uppercase tracking-widest font-bold text-gold">Confirmar tu ejemplar</span>
+              <h2 id="edition-dialog-heading" className="font-serif text-3xl">¿Qué edición tienes en casa?</h2>
+              <p className="text-sm text-ink/60">
+                Elige el sello discográfico y si tu copia es CD o vinilo. Se cargarán los datos de esa edición exacta de Discogs.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="edition-label" className="text-sm font-semibold">Sello discográfico de tu ejemplar</label>
+              <select id="edition-label" autoFocus value={editionLabel}
+                onChange={e => { setEditionLabel(e.target.value); setEditionReleaseId(''); setEditionError(''); }}
+                className="w-full rounded-xl bg-ink/5 px-4 py-3">
+                <option value="">Selecciona un sello...</option>
+                {Array.from(new Set(editionCandidates.flatMap(candidate => candidate.labels))).sort().map(item =>
+                  <option key={item} value={item}>{item}</option>)}
+              </select>
+            </div>
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-semibold">Formato de tu ejemplar</legend>
+              <div className="grid grid-cols-2 gap-3">
+                {(['CD', 'Vinilo'] as const).map(value => (
+                  <button key={value} type="button" aria-pressed={editionFormat === value}
+                    onClick={() => { setEditionFormat(value); setEditionReleaseId(''); setEditionError(''); }}
+                    className={cn('rounded-xl border px-4 py-4 font-medium',
+                      editionFormat === value ? 'border-gold bg-gold/10' : 'border-ink/15')}>
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            {editionLabel && editionFormat && (
+              <div className="space-y-2">
+                <label htmlFor="edition-release" className="text-sm font-semibold">Edición que corresponde a tu copia</label>
+                {matchingCandidates.length ? (
+                  <select id="edition-release"
+                    value={editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '')}
+                    onChange={e => { setEditionReleaseId(e.target.value); setEditionError(''); }}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3 text-sm">
+                    <option value="">Seleccionar edición...</option>
+                    {matchingCandidates.map(candidate => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.title} · {candidate.year || 's/f'} · {candidate.catno || 's/n'} · Discogs #{candidate.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p role="alert" className="text-sm text-amber-700">
+                    No aparece una edición que coincida. Busca por el código de barras o un número de catálogo más específico. No se copiarán datos de otra edición.
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-ink/50">
+              El sello original es un dato distinto. Sólo se completará si hay una fuente fiable; también puedes ingresarlo manualmente.
+            </p>
+            {editionError && <p role="alert" className="text-sm text-red-700">{editionError}</p>}
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
+              <button type="button" disabled={editionLoading} onClick={() => setEditionDialogOpen(false)}
+                className="rounded-full border border-ink/15 px-5 py-3 text-sm">Volver sin confirmar</button>
+              <button type="button" disabled={editionLoading || !editionLabel || !editionFormat || !matchingCandidates.length ||
+                (matchingCandidates.length > 1 && !editionReleaseId)}
+                onClick={confirmEdition}
+                className="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">
+                {editionLoading ? 'Cargando edición...' : 'Confirmar y completar datos'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {title && (
         <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-8">
