@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
@@ -302,56 +303,109 @@ function Footer() {
 
 // --- Pages ---
 
-function RecordLabelCleanup() {
+function CatalogMaintenance() {
   const { canAccess } = useAuth();
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState('');
-  const cleanExistingLabels = async () => {
-    if (running || !window.confirm('¿Corregir sellos repetidos en todos los álbumes? No se modificarán otros datos.')) return;
-    setRunning(true);
-    setResult('Revisando álbumes...');
-    let corrected = 0;
-    let failed = 0;
-    try {
-      const snapshot = await getDocs(collection(db, 'albums'));
-      for (const albumDoc of snapshot.docs) {
-        const data = albumDoc.data();
-        const changes: Record<string, string> = {};
-        for (const field of ['label', 'originalLabel']) {
-          const value = data[field];
-          if (typeof value === 'string') {
-            const normalized = normalizeRecordLabels(value);
-            if (normalized !== value) changes[field] = normalized;
-          }
-        }
-        if (Object.keys(changes).length) {
-          try {
-            await updateDoc(albumDoc.ref, changes);
-            corrected++;
-          } catch (error) {
-            failed++;
-            console.error('Error correcting album:', albumDoc.id, error);
-          }
-        }
-      }
-      setResult(`Listo: ${corrected} álbumes corregidos; ${failed} errores.`);
-    } catch (error) {
-      console.error('Could not review albums:', error);
-      setResult('No se pudo acceder a los álbumes. Revisa los permisos.');
-    } finally {
-      setRunning(false);
-    }
+  const [report, setReport] = useState<ReturnType<typeof inspectCatalog> | null>(null);
+  const [message, setMessage] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  const loadCatalog = async () => {
+    const [artistDocs, albumDocs, collectionDocs, jobDocs] = await Promise.all([
+      getDocs(collection(db, 'artists')),
+      getDocs(collection(db, 'albums')),
+      getDocs(collection(db, 'collection')),
+      getDocs(collection(db, 'import_jobs'))
+    ]);
+    return {
+      artists: artistDocs.docs.map(item => ({ ...item.data(), id: item.id } as Artist)),
+      albums: albumDocs.docs.map(item => ({ ...item.data(), id: item.id } as Album)),
+      collection: collectionDocs.docs.map(item => ({ ...item.data(), id: item.id } as CollectionItem)),
+      import_jobs: jobDocs.docs.map(item => ({ ...item.data(), id: item.id } as Record<string, unknown>)),
+    };
   };
+
+  const downloadBackup = async () => {
+    if (running) return;
+    setRunning(true);
+    setMessage('Preparando copia de seguridad...');
+    try {
+      const data = await loadCatalog();
+      const json = serializeCatalogBackup({
+        format: 'musica-elegante-backup',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        description: 'Copia de metadatos Firestore; los archivos de Firebase Storage no están incluidos.',
+        ...data,
+      });
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'musica-elegante-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`Archivo JSON preparado: ${data.artists.length} artistas y ${data.albums.length} álbumes. Guarda una copia segura.`);
+    } catch (error) {
+      console.error('Backup failed', error);
+      setMessage('No se pudo exportar todo el catálogo. Comprueba la conexión y los permisos.');
+    } finally { setRunning(false); }
+  };
+
+  const inspect = async () => {
+    if (running) return;
+    setRunning(true);
+    setMessage('Analizando integridad del catálogo...');
+    try {
+      const data = await loadCatalog();
+      const issues = inspectCatalog(data.albums, data.artists);
+      setReport(issues);
+      setPreviewOpen(true);
+      setMessage(`Se revisaron ${data.albums.length} álbumes y ${data.artists.length} artistas; ${issues.length} observaciones para revisión. No se modificó nada.`);
+    } catch (error) {
+      console.error('Catalog audit failed', error);
+      setMessage('No se pudo completar la revisión. No se modificó ningún registro.');
+    } finally { setRunning(false); }
+  };
+
   if (!canAccess) return null;
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 border border-gold/30 rounded-2xl flex flex-wrap items-center gap-3">
-      <span className="text-sm">Mantenimiento de sellos discográficos</span>
-      <button type="button" onClick={cleanExistingLabels} disabled={running}
-        className="rounded-full bg-ink text-paper px-5 py-2 text-sm disabled:opacity-50">
-        {running ? 'Corrigiendo...' : 'Corregir sellos repetidos'}
-      </button>
-      {result && <span role="status" className="text-sm">{result}</span>}
-    </div>
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 space-y-3" aria-label="Mantenimiento y copias de seguridad">
+      <div className="rounded-2xl border border-gold/30 bg-white p-4 sm:p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="font-serif text-xl">Seguridad e integridad del catálogo</h2>
+            <p className="text-sm text-ink/60">Exportar los datos o revisar posibles inconsistencias sin eliminar registros.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={downloadBackup} disabled={running} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-50">Descargar copia JSON</button>
+            <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
+          </div>
+        </div>
+        <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
+        {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
+        {previewOpen && report !== null && (
+          <div className="space-y-3 border-t border-ink/10 pt-3">
+            <div className="flex justify-between items-center gap-3">
+              <h3 className="font-medium text-sm">Observaciones ({report.length})</h3>
+              <button type="button" className="underline text-sm" onClick={() => setPreviewOpen(false)}>Ocultar</button>
+            </div>
+            {report.length === 0 ? <p className="text-sm text-ink/60">No se detectaron problemas con estas comprobaciones.</p> : (
+              <div className="max-h-72 overflow-y-auto divide-y divide-ink/10 border border-ink/10 rounded-xl">
+                {report.slice(0, 150).map((issue, index) => (
+                  <div key={issue.albumId + issue.kind + index} className="p-3 text-sm">
+                    <strong>{issue.title}</strong> — {issue.detail}
+                  </div>
+                ))}
+                {report.length > 150 && <p className="p-3 text-sm text-ink/60">Se muestran las primeras 150 observaciones.</p>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -369,7 +423,7 @@ function Home() {
 
   return (
     <div className="space-y-20">
-      <RecordLabelCleanup />
+      <CatalogMaintenance />
       <section className="relative h-[80vh] flex items-center justify-center overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img 
@@ -1567,113 +1621,6 @@ const SEED_DATA: { artist: Partial<Artist>, albums: Partial<Album>[] }[] = [
     ]
   },
 ];
-
-function SeedButton() {
-  const [loading, setLoading] = useState(false);
-
-  const seed = async () => {
-    setLoading(true);
-    try {
-      for (const data of SEED_DATA) {
-        const artistId = slugifyArtistId(data.artist.name || 'artist');
-        await setDoc(doc(db, 'artists', artistId), data.artist, { merge: true });
-        for (const albumData of data.albums) {
-          await addDoc(collection(db, 'albums'), { ...albumData, artistId, artistName: data.artist.name });
-        }
-      }
-      alert('Datos iniciales cargados con éxito.');
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <button 
-      onClick={seed}
-      disabled={loading}
-      className="fixed bottom-4 right-4 p-2 bg-gold text-white rounded-full shadow-lg z-[200] hover:scale-110 transition-transform"
-      title="Cargar datos iniciales (Solo Admin)"
-    >
-      <Plus size={20} />
-    </button>
-  );
-}
-
-function CleanupButton() {
-  const [loading, setLoading] = useState(false);
-
-  const cleanup = async () => {
-    setLoading(true);
-    try {
-      // Cleanup Artists
-      const artistsSnapshot = await getDocs(collection(db, 'artists'));
-      const artists = artistsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Artist));
-      const artistGroups: { [key: string]: string[] } = {};
-
-      artists.forEach(artist => {
-        const key = `${artist.name.toLowerCase().trim()}_${artist.genre}`;
-        if (!artistGroups[key]) {
-          artistGroups[key] = [];
-        }
-        artistGroups[key].push(artist.id);
-      });
-
-      for (const key in artistGroups) {
-        const ids = artistGroups[key];
-        if (ids.length > 1) {
-          // Keep the first one, delete the rest
-          for (let i = 1; i < ids.length; i++) {
-            await deleteDoc(doc(db, 'artists', ids[i]));
-          }
-        }
-      }
-
-      // Cleanup Albums
-      const albumsSnapshot = await getDocs(collection(db, 'albums'));
-      const albums = albumsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Album));
-      const albumGroups: { [key: string]: string[] } = {};
-
-      albums.forEach(album => {
-        const key = `${album.title.toLowerCase().trim()}_${album.artistId}`;
-        if (!albumGroups[key]) {
-          albumGroups[key] = [];
-        }
-        albumGroups[key].push(album.id);
-      });
-
-      for (const key in albumGroups) {
-        const ids = albumGroups[key];
-        if (ids.length > 1) {
-          // Keep the first one, delete the rest
-          for (let i = 1; i < ids.length; i++) {
-            await deleteDoc(doc(db, 'albums', ids[i]));
-          }
-        }
-      }
-
-      alert('Duplicados eliminados correctamente.');
-    } catch (error) {
-      console.error('Error al limpiar duplicados:', error);
-      alert('Error al limpiar duplicados.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <button 
-      onClick={cleanup}
-      disabled={loading}
-      className="fixed bottom-4 right-16 p-2 bg-red-500 text-white rounded-full shadow-lg z-[200] hover:scale-110 transition-transform disabled:opacity-50"
-      title="Limpiar Duplicados"
-    >
-      <Trash2 size={20} />
-    </button>
-  );
-}
-
 
 function SearchPage() {
   const [albums, setAlbums] = useState<Album[]>([]);
