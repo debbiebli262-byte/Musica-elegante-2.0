@@ -1,7 +1,9 @@
+import { requireLibraryMember } from './_auth';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from '@google/genai';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (!(await requireLibraryMember(req, res))) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
