@@ -1,3 +1,4 @@
+import { requireLibraryMember } from './_auth';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI } from "@google/genai";
 
@@ -54,6 +55,7 @@ async function fetchWikipediaArtistImage(artistName: string): Promise<string> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (!(await requireLibraryMember(req, res))) return;
   const artistName = String(req.query.name || "").trim();
 
   if (!artistName) {
