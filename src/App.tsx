@@ -3081,6 +3081,7 @@ function DiscogsImportPage() {
       applyDiscogsData(data, searchValue.trim());
       setLabel(editionLabel);
       setFormats([editionFormat]);
+      setEditionReleaseId(selectedId);
       setCollectionStatus('owned');
       setEditionConfirmed(true);
       setEditionDialogOpen(false);
@@ -3128,18 +3129,17 @@ function DiscogsImportPage() {
   };
 
   const findExistingAlbumId = async () => {
-    const albumsRef = collection(db, 'albums');
-    const snapshot = await getDocs(albumsRef);
-    const clean = (value?: string) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const currentCat = clean(catalogNumber || editionCatalogNumber || originalCatalogNumber);
-    const currentTitle = clean(title);
-    const currentArtist = clean(artistName);
-
+    const snapshot = await getDocs(collection(db, 'albums'));
+    const normalized = (value?: string) => String(value || '').trim().toLocaleLowerCase();
+    const candidateCat = normalized(catalogNumber);
     for (const albumDoc of snapshot.docs) {
-      const a = albumDoc.data() as Album;
-      const albumCats = [a.catalogNumber, a.editionCatalogNumber, a.originalCatalogNumber].map(clean).filter(Boolean);
-      if (currentCat && albumCats.includes(currentCat)) return albumDoc.id;
-      if (currentTitle && clean(a.title) === currentTitle && clean(a.artistName) === currentArtist) return albumDoc.id;
+      const existing = albumDoc.data() as Album & { discogsReleaseId?: number };
+      if (existing.discogsReleaseId && existing.discogsReleaseId === Number(editionReleaseId)) return albumDoc.id;
+      const sameEdition = normalized(existing.title) === normalized(title) &&
+        normalized(existing.catalogNumber) === candidateCat &&
+        normalized(existing.label) === normalized(label) &&
+        existing.formats?.includes(formats[0]);
+      if (sameEdition) return albumDoc.id;
     }
     return null;
   };
@@ -3201,9 +3201,16 @@ function DiscogsImportPage() {
         resolvedArtistIds.push(artistId);
       }
 
-      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber);
+      // Discogs ID distinguishes CD and vinyl releases sharing a catalog number.
+      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
       const albumRef = doc(db, 'albums', albumId);
+      const existingExactId = await getDoc(albumRef);
+      if (existingExactId.exists()) {
+        setImportError('Esta edición ya existe. No se ha sobrescrito ningún álbum.');
+        return;
+      }
       await setDoc(albumRef, {
+        discogsReleaseId: Number(editionReleaseId),
         artistId: mainArtistId,
         artistName: mainArtistName,
         allArtistIds: Array.from(new Set(resolvedArtistIds)),
