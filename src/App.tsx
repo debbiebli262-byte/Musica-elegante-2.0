@@ -3958,10 +3958,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               <div className="space-y-1">
                 {(album.discs || []).flatMap((disc, discIndex) =>
                   (disc.works || []).map((work, workIndex) => (
-                    <a key={discIndex + '-' + workIndex} href={'#work-' + discIndex + '-' + workIndex}
-                       className="block rounded-lg px-2 py-2 text-sm hover:bg-white focus-visible:outline focus-visible:outline-gold">
+                    <button type="button" key={discIndex + '-' + workIndex}
+                       onClick={() => document.getElementById('work-' + discIndex + '-' + workIndex)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+                       className="block w-full text-left rounded-lg px-2 py-2 text-sm hover:bg-white focus-visible:outline focus-visible:outline-gold">
                       <span className="text-gold font-bold">Disco {disc.discNumber} · </span>{work.title}
-                    </a>
+                    </button>
                   )))}
               </div>
             </div>
