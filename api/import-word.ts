@@ -1,6 +1,7 @@
 import { requireLibraryMember } from '../src/server/libraryAuth.js';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI } from "@google/genai";
+import { extractSourceBiography, normalizeWrittenFullDate } from '../src/utils/wordSourceAccuracy.js';
 
 // Dynamically import mammoth only when needed (it's a heavy CommonJS module)
 async function extractTextFromDocx(buffer: Buffer): Promise<string> {
@@ -192,6 +193,14 @@ ${rawText.slice(0, 80000)}`;
 
     if (!parsed || typeof parsed !== 'object' || !parsed.composer || !Array.isArray(parsed.recordings)) {
       return res.status(502).json({ error: 'La IA devolvió una estructura incompleta. No se guardó ningún dato.' });
+    }
+    // For structured Word files, take the biography directly from the source.
+    // AI is still used for record/edition extraction, but never paraphrases existing biography text.
+    const exactBiography = extractSourceBiography(rawText);
+    if (exactBiography) parsed.composer.biography = exactBiography;
+    for (const field of ['birthDate', 'deathDate'] as const) {
+      const value = parsed.composer[field];
+      if (typeof value === 'string') parsed.composer[field] = normalizeWrittenFullDate(value);
     }
     parsed.albums = Array.isArray(parsed.albums) ? parsed.albums : [];
     parsed.warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
