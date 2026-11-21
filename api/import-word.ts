@@ -92,19 +92,19 @@ export default async function handler(
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `Analiza el siguiente texto extraído de un archivo Word de música clásica y extrae la información estructurada.
+    const prompt = `Analiza el siguiente texto extraído de un archivo Word sobre un artista de música clásica o jazz y su discografía. Extrae todos los datos documentados, sin añadir información inventada.
 
 Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin explicaciones) con esta estructura exacta:
 
 {
   "composer": {
-    "name": "nombre del compositor",
+    "name": "nombre del artista o compositor",
     "birthDate": "fecha en formato YYYY-MM-DD o texto libre si no hay formato claro",
     "birthPlace": "lugar de nacimiento",
     "deathDate": "fecha en formato YYYY-MM-DD o texto libre",
     "deathPlace": "lugar de fallecimiento",
     "nationality": "nacionalidad",
-    "biography": "biografía completa"
+    "biography": "transcripción fiel y completa de la biografía del documento"
   },
   "albums": [
     {
