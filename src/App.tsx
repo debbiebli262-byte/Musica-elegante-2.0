@@ -2253,6 +2253,7 @@ function ImportWordPage() {
   }>>({});
   const [enrichingAlbum, setEnrichingAlbum] = useState('');
   const [enrichMessage, setEnrichMessage] = useState('');
+  const [batchSearching, setBatchSearching] = useState(false);
   const extractedCandidates = wordAlbumCandidates(parsedData?.albums || [], parsedData?.recordings || []);
   const albumsForImport = extractedCandidates.map(item => enrichedWordAlbums[normalizedEditionKey(item)] || item);
 
@@ -2327,6 +2328,25 @@ function ImportWordPage() {
       setEnrichMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setEnrichingAlbum('');
+    }
+  };
+
+  const searchAllWordAlbums = async () => {
+    const searchables = extractedCandidates.filter(album => album.barcode || album.catalogNumber);
+    if (!searchables.length) {
+      setEnrichMessage('No hay números de catálogo ni códigos de barras para buscar.');
+      return;
+    }
+    setBatchSearching(true);
+    setEnrichMessage(`Buscando ${searchables.length} ediciones en Discogs. Los resultados requieren revisión.`);
+    try {
+      // Sequential requests avoid sending a burst to Discogs from a single import.
+      for (let index = 0; index < searchables.length; index++) {
+        await lookupWordAlbum(searchables[index]);
+        setEnrichMessage(`Búsquedas completadas: ${index + 1}/${searchables.length}. Elige las ediciones correctas antes de guardar.`);
+      }
+    } finally {
+      setBatchSearching(false);
     }
   };
 
@@ -2713,7 +2733,13 @@ function ImportWordPage() {
                       <h3 className="font-serif text-2xl">Ediciones discográficas encontradas</h3>
                       <p className="text-xs text-ink/50 mt-1">Se importará cada edición una sola vez. Discogs es opcional y sólo se aplican ediciones que elijas.</p>
                     </div>
-                    <span className="text-xs rounded-full bg-gold/10 px-3 py-2 font-semibold text-gold">{albumsForImport.length} álbum(es)</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs rounded-full bg-gold/10 px-3 py-2 font-semibold text-gold">{albumsForImport.length} álbum(es)</span>
+                      <button type="button" onClick={searchAllWordAlbums} disabled={batchSearching || !extractedCandidates.some(a => a.catalogNumber || a.barcode)}
+                        className="rounded-full bg-ink px-4 py-2 text-xs font-semibold text-paper disabled:opacity-40">
+                        {batchSearching ? 'Buscando en Discogs...' : 'Buscar todos en Discogs'}
+                      </button>
+                    </div>
                   </div>
                   {enrichMessage && <p role="status" className="text-xs rounded-lg bg-ink/5 p-3 text-ink/70">{enrichMessage}</p>}
                   {albumsForImport.map((candidate, index) => {
