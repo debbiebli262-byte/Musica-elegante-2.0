@@ -1,31 +1,28 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Public catalog, editable only by the verified library administrator.
-    function isAdmin() {
+    // Both named accounts have identical rights. Nobody else can read or edit.
+    function isAllowedMember() {
       return request.auth != null
-        && request.auth.token.email == 'debbiebli262@gmail.com'
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'debbiebli262@gmail.com',
+          'javierblinder@yahoo.com.ar'
+        ];
     }
 
     match /artists/{artistId} {
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow read, write: if isAllowedMember();
     }
-
     match /albums/{albumId} {
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow read, write: if isAllowedMember();
     }
-
-    // This app uses userId='public' for its shared collection.
     match /import_jobs/{jobId} {
-      allow read, create, update, delete: if isAdmin();
+      allow read, write: if isAllowedMember();
     }
-
+    // Both members share one collection; no admin role.
     match /collection/{itemId} {
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow read, write: if isAllowedMember();
     }
   }
 }
