@@ -1588,6 +1588,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
           {album.imageUrl ? (
             <img 
               src={album.imageUrl} 
+              loading="lazy" decoding="async"
               alt={album.title} 
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
@@ -1687,8 +1688,8 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
       <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
         <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors break-words">{album.title}</h4>
         <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
-          <p className="text-[10px] uppercase tracking-widest text-ink/60 font-bold truncate flex-1 mr-2">{artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}</p>
-          <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold whitespace-nowrap">
+          <p className="text-xs uppercase tracking-wide text-ink/60 font-bold truncate flex-1 mr-2">{artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}</p>
+          <p className="text-xs uppercase tracking-wide text-ink/50 font-bold whitespace-nowrap">
             {[album.releaseYear, album.label].filter(Boolean).join(' • ')}
           </p>
         </div>
