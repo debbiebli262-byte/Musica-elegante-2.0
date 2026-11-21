@@ -3724,7 +3724,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row min-w-0" role="dialog" aria-modal="true" aria-label={`Detalles del álbum: ${album.title}`
+        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row min-w-0" role="dialog" aria-modal="true" aria-label={`Detalles del álbum: ${album.title}`}
       >
         <button type="button" onClick={onClose} aria-label="Cerrar detalles del álbum" className="md:hidden sticky top-3 self-end mr-3 -mb-12 z-30 w-11 h-11 flex items-center justify-center bg-paper/95 rounded-full shadow-md text-ink"><X size={22} /></button>
         {/* Left Side: Cover & Basic Info */}
