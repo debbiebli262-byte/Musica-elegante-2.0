@@ -188,6 +188,17 @@ function Navbar() {
   const location = useLocation();
   const { logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [readerMode, setReaderMode] = useState(() => {
+    try { return window.localStorage.getItem('musica-elegante-reader-mode') === 'large'; }
+    catch { return false; }
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('reader-mode', readerMode);
+    try { window.localStorage.setItem('musica-elegante-reader-mode', readerMode ? 'large' : 'standard'); }
+    catch { /* Private browsing can disable storage. */ }
+    return () => document.documentElement.classList.remove('reader-mode');
+  }, [readerMode]);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -227,10 +238,17 @@ function Navbar() {
         </div>
 
         
-        <button type="button" onClick={() => void logout()}
-          className="hidden md:inline-flex items-center gap-2 rounded-full border border-ink/10 px-4 py-2 text-xs uppercase tracking-wider hover:text-gold">
-          <LogOut size={16} /> Salir
-        </button>
+        <div className="hidden md:flex items-center gap-2">
+          <button type="button" onClick={() => setReaderMode(value => !value)}
+            aria-pressed={readerMode} title="Aumentar o reducir el tamaño de lectura"
+            className="rounded-full border border-ink/20 px-4 py-2 text-sm font-semibold hover:text-gold focus-visible:outline-2 focus-visible:outline-gold">
+            {readerMode ? 'Texto normal' : 'Texto grande'}
+          </button>
+          <button type="button" onClick={() => void logout()}
+            className="inline-flex items-center gap-2 rounded-full border border-ink/10 px-4 py-2 text-xs uppercase tracking-wider hover:text-gold">
+            <LogOut size={16} /> Salir
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => setMobileMenuOpen((prev) => !prev)}
@@ -265,6 +283,10 @@ function Navbar() {
                   {item.name}
                 </Link>
               ))}
+              <button type="button" onClick={() => setReaderMode(value => !value)}
+                aria-pressed={readerMode} className="text-left px-5 py-4 border-t border-ink/10 text-base font-semibold">
+                {readerMode ? 'A · Texto normal' : 'A+ · Texto grande'}
+              </button>
               <button type="button" onClick={() => void logout()} className="text-left px-5 py-4 border-t border-ink/10 text-sm uppercase tracking-wider">
                 Salir
               </button>
