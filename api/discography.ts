@@ -1,4 +1,4 @@
-import { requireLibraryMember } from './_auth';
+import { requireLibraryMember } from '../src/server/libraryAuth';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from '@google/genai';
 
