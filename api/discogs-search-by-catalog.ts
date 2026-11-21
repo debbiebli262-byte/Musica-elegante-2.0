@@ -395,7 +395,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // distinct labels but never repeat an identical name.
     const seenLabels = new Set<string>();
     const labelNames = labelValues.map(label => String(label).trim()).filter(label => {
-      const key = label.normalize("NFKC").replace(/\\s+/g, " ").toLowerCase();
+      const key = label.normalize("NFKC").replace(/\s+/g, " ").toLowerCase();
       if (!label || seenLabels.has(key)) return false;
       seenLabels.add(key);
       return true;
