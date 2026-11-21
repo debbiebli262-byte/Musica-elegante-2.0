@@ -1740,7 +1740,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-serif text-xl group-hover:text-gold transition-colors truncate">{album.title}</h3>
+          <h3 className="font-serif text-xl group-hover:text-gold transition-colors truncate" title={album.title}>{album.title}</h3>
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold truncate">
             {artistName}{getCatalogRecordType(album) === 'work' ? ' • Obra musical' : ''}{album.releaseYear && ` • ${album.releaseYear}`}{album.label && ` • ${album.label}`}
           </p>
@@ -1826,7 +1826,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
         )}
       </div>
       <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
-        <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors break-words">{album.title}</h4>
+        <h4 className="block w-full min-w-0 truncate font-serif text-lg leading-tight group-hover:text-gold transition-colors" title={album.title}>{album.title}</h4>
         <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
           <p className="text-xs uppercase tracking-wide text-ink/60 font-bold truncate flex-1 mr-2">{artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}</p>
           <p className="text-xs uppercase tracking-wide text-ink/50 font-bold whitespace-nowrap">
@@ -2819,6 +2819,11 @@ function ComparePage() {
 }
 
 
+function getDiscogsLabelOptions(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return Array.from(new Set(values.map(value => String(value).trim()).filter(Boolean)));
+}
+
 function DiscogsImportPage() {
   const navigate = useNavigate();
   const [searchMode, setSearchMode] = useState<'catno' | 'barcode'>('catno');
@@ -2841,6 +2846,7 @@ function DiscogsImportPage() {
   const [imageUrl, setImageUrl] = useState('');
   const [country, setCountry] = useState('');
   const [label, setLabel] = useState('');
+  const [discogsLabelOptions, setDiscogsLabelOptions] = useState<string[]>([]);
   const [catalogNumber, setCatalogNumber] = useState('');
   const [originalCatalogNumber, setOriginalCatalogNumber] = useState('');
   const [editionCatalogNumber, setEditionCatalogNumber] = useState('');
@@ -2889,6 +2895,7 @@ function DiscogsImportPage() {
     setImageUrl('');
     setCountry('');
     setLabel('');
+    setDiscogsLabelOptions([]);
     setCatalogNumber('');
     setOriginalCatalogNumber('');
     setEditionCatalogNumber('');
@@ -2976,8 +2983,11 @@ function DiscogsImportPage() {
       setReleaseYear(data.year ? String(data.year) : '');
       setEditionDate(data.year ? String(data.year) : '');
       setCountry(data.country || '');
-      setLabel(normalizeRecordLabels(data.label || ''));
-      setOriginalLabel(normalizeRecordLabels(data.originalLabel || data.label || ''));
+      const labelOptions = getDiscogsLabelOptions(data.label);
+      setDiscogsLabelOptions(labelOptions);
+      const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
+      setLabel(onlyLabel);
+      setOriginalLabel(onlyLabel);
       setCatalogNumber(data.catno || value);
       setEditionCatalogNumber(data.catno || value);
       setOriginalCatalogNumber(data.originalCatalogNumber || data.catno || '');
@@ -3027,6 +3037,11 @@ function DiscogsImportPage() {
   const saveApprovedImport = async () => {
     const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
+
+    if (discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
+      alert('Selecciona el sello discográfico de tu edición antes de guardar.');
+      return;
+    }
 
     if (!mainArtistName || artistsToSave.length === 0 || !title.trim()) {
       alert('Faltan artista(s) y/o título del álbum.');
@@ -3214,7 +3229,17 @@ function DiscogsImportPage() {
                 </select>
               </div>
               <Field label="Año" value={releaseYear} setValue={setReleaseYear} />
-              <Field label="Sello" value={label} setValue={setLabel} />
+              {discogsLabelOptions.length > 1 && (
+              <div className="space-y-2">
+                <label htmlFor="discogs-import-label" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">¿Qué sello tiene tu edición?</label>
+                <select id="discogs-import-label" required value={label} onChange={event => { setLabel(event.target.value); setOriginalLabel(event.target.value); }}
+                  className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
+                  <option value="">Selecciona un sello...</option>
+                  {discogsLabelOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </div>
+            )}
+            <Field label="Sello" value={label} setValue={value => { setLabel(value); setOriginalLabel(value); }} />
               <Field label="Nº catálogo" value={catalogNumber} setValue={setCatalogNumber} />
               <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber} />
               <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber} />
@@ -4630,6 +4655,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [releaseDate, setReleaseDate] = useState(album?.releaseDate || '');
   const [location, setLocation] = useState(album?.location || '');
   const [label, setLabel] = useState(album?.label || '');
+  const [discogsLabelOptions, setDiscogsLabelOptions] = useState<string[]>([]);
   const [catalogNumber, setCatalogNumber] = useState(album?.catalogNumber || '');
   const [originalCatalogNumber, setOriginalCatalogNumber] = useState(album?.originalCatalogNumber || '');
   const [editionCatalogNumber, setEditionCatalogNumber] = useState(album?.editionCatalogNumber || '');
@@ -4765,15 +4791,17 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         setEditionDate((current) => current || yearText);
       }
       if (data.country) setCountry(data.country);
-      if (data.label) {
-        setLabel(normalizeRecordLabels(data.label));
-        setOriginalLabel((current) => normalizeRecordLabels(current || data.label));
+      const labelOptions = getDiscogsLabelOptions(data.label);
+      setDiscogsLabelOptions(labelOptions);
+      if (labelOptions.length) {
+        const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
+        setLabel(onlyLabel);
+        setOriginalLabel(onlyLabel);
       }
       if (data.catno) {
         setCatalogNumber(data.catno);
         setEditionCatalogNumber((current) => current || data.catno);
       }
-      if (data.originalLabel) setOriginalLabel(normalizeRecordLabels(data.originalLabel));
       if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
       if (data.originalYear) setOriginalYear(String(data.originalYear));
       if (data.orchestra) setOrchestra(data.orchestra);
@@ -6105,6 +6133,14 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Editor</label>
+                  {discogsLabelOptions.length > 1 && (
+                    <select aria-label="Selecciona el sello de tu edición" value={discogsLabelOptions.includes(label) ? label : ''}
+                      onChange={event => { setLabel(event.target.value); setOriginalLabel(event.target.value); }}
+                      className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
+                      <option value="">Selecciona el sello correcto...</option>
+                      {discogsLabelOptions.map(option => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  )}
                   <input 
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
