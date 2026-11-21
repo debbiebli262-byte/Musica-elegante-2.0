@@ -5008,6 +5008,10 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
+      alert('Selecciona el sello discográfico de tu edición antes de guardar.');
+      return;
+    }
     setSaving(true);
     try {
       const data = { 
