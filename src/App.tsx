@@ -1950,7 +1950,7 @@ function ImportWordPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-8">
-        <div className="rounded-3xl border border-ink/10 bg-white p-6 md:p-8 shadow-sm space-y-6">
+        <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-6">
           <div className="space-y-2">
             <h2 className="font-serif text-3xl">1. Seleccionar archivo</h2>
             <p className="text-sm text-ink/60 leading-relaxed">
@@ -2635,10 +2635,10 @@ function DiscogsImportPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-16 space-y-10">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-16 space-y-8 sm:space-y-10">
       <div className="space-y-4">
         <span className="text-xs uppercase tracking-widest font-bold text-gold">Importación Discogs</span>
-        <h1 className="font-serif text-5xl md:text-6xl italic">Agregar álbum por catálogo o barcode</h1>
+        <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl italic leading-tight break-words">Agregar álbum por catálogo o barcode</h1>
         <p className="text-ink/60 max-w-3xl leading-relaxed">
           Busca el release en Discogs, revisa todos los datos encontrados, edita lo que quieras y recién después aprueba el guardado final. Si el artista no existe, se crea primero; si ya existe, el álbum queda en su página.
         </p>
@@ -2660,7 +2660,7 @@ function DiscogsImportPage() {
       </div>
 
       {title && (
-        <div className="rounded-3xl border border-ink/10 bg-white p-6 md:p-8 shadow-sm space-y-8">
+        <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
             <div className="w-full md:w-56 shrink-0 space-y-3">
               <div className="aspect-square rounded-3xl overflow-hidden bg-ink/5 shadow-md">
@@ -3603,6 +3603,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row"
       >
+        <button type="button" onClick={onClose} aria-label="Cerrar detalles del álbum" className="md:hidden sticky top-3 self-end mr-3 -mb-12 z-30 w-11 h-11 flex items-center justify-center bg-paper/95 rounded-full shadow-md text-ink"><X size={22} /></button>
         {/* Left Side: Cover & Basic Info */}
         <div className="w-full md:w-2/5 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
           <div className="w-40 sm:w-full max-w-full aspect-square rounded-2xl overflow-hidden shadow-lg sm:shadow-2xl bg-ink/10 mx-auto">
@@ -4818,9 +4819,9 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
               {genre === 'classical' ? (
                 <div className="space-y-8">
                   {discs.map((disc, dIdx) => (
-                    <div key={dIdx} className="p-6 bg-ink/5 rounded-3xl border border-ink/10 space-y-6 relative">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
+                    <div key={dIdx} className="p-3 sm:p-6 bg-ink/5 rounded-2xl sm:rounded-3xl border border-ink/10 space-y-6 relative">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex flex-col min-[430px]:flex-row min-w-0 gap-3 sm:gap-4">
                           <div className="flex items-center gap-2">
                             <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Disco</label>
                             <input 
@@ -4841,7 +4842,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                               newDiscs[dIdx].title = e.target.value;
                               setDiscs(newDiscs);
                             }}
-                            className="bg-paper border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-gold"
+                            className="min-w-0 w-full sm:w-auto bg-paper border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-gold"
                             placeholder="Título del Disco (opcional)"
                           />
                         </div>
