@@ -6017,7 +6017,24 @@ function PrivateAccessGate({ children }: { children: ReactNode }) {
     try { await action(); }
     catch (error) {
       console.error('Sign-in error:', error);
-      setLoginError('No se pudo iniciar sesión. Comprueba la cuenta y el método de acceso.');
+      const code = (error && typeof error === 'object' && 'code' in error)
+        ? String(error.code) : '';
+      const messages: Record<string, string> = {
+        'auth/popup-blocked': 'El navegador bloqueó la ventana de Google. Permite ventanas emergentes e inténtalo otra vez.',
+        'auth/popup-closed-by-user': 'La ventana de Google se cerró antes de terminar.',
+        'auth/cancelled-popup-request': 'El intento de acceso fue cancelado. Inténtalo de nuevo.',
+        'auth/unauthorized-domain': 'El dominio del sitio no está autorizado en Firebase. Añádelo a Authentication → Settings → Authorized domains.',
+        'auth/operation-not-allowed': 'Google no está habilitado en Firebase. Actívalo en Authentication → Sign-in method.',
+        'auth/account-exists-with-different-credential': 'Ya existe una cuenta con ese correo y otro método de acceso.',
+        'auth/network-request-failed': 'No se pudo conectar a Firebase. Comprueba Internet.',
+        'auth/invalid-credential': 'Las credenciales no son válidas.',
+        'auth/invalid-email': 'El correo no es válido.',
+        'auth/invalid-login-credentials': 'El correo o la contraseña son incorrectos.',
+        'auth/wrong-password': 'La contraseña es incorrecta.',
+        'auth/user-not-found': 'Esa cuenta no existe en Firebase Authentication.',
+        'auth/too-many-requests': 'Demasiados intentos. Prueba más tarde.'
+      };
+      setLoginError(messages[code] || `No se pudo iniciar sesión${code ? ` (${code})` : ''}. Inténtalo de nuevo.`);
     } finally { setSigningIn(false); }
   };
 
