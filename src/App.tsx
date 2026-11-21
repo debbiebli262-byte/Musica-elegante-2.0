@@ -13,7 +13,6 @@ import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { proposeArtistRepairs, isRepairStillApplicable, type ArtistRepair } from './utils/artistRepairs';
-import { proposeArtistRepairs, isRepairStillApplicable, type ArtistRepair } from './utils/artistRepairs';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
@@ -312,7 +311,6 @@ function CatalogMaintenance() {
   const [message, setMessage] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [backupDownloaded, setBackupDownloaded] = useState(false);
-  const [repairPreview, setRepairPreview] = useState<ArtistRepair[] | null>(null);
   const [artistRepairs, setArtistRepairs] = useState<ArtistRepair[] | null>(null);
 
   const loadCatalog = async () => {
@@ -460,55 +458,6 @@ function CatalogMaintenance() {
     setMessage(`Correcciones guardadas: ${updated}. Omitidas por datos cambiados: ${skipped}. Errores: ${failed}. Revisa el catálogo otra vez.`);
   };
 
-  const previewArtistRepairs = async () => {
-    if (running) return;
-    setRunning(true);
-    try {
-      const data = await loadCatalog();
-      const proposals = proposeArtistRepairs(data.albums, data.artists);
-      setRepairPreview(proposals);
-      setMessage(proposals.length
-        ? `${proposals.length} correcciones de artistas disponibles. Revisa antes de aplicar; no se borrará ningún álbum.`
-        : 'No se encontraron vínculos de artista que podamos corregir de forma segura.');
-    } catch (error) {
-      console.error('Could not preview artist repairs', error);
-      setMessage('No se pudo preparar la revisión de artistas.');
-    } finally { setRunning(false); }
-  };
-
-  const applyArtistRepairs = async () => {
-    if (running || !backupDownloaded || !repairPreview?.length) return;
-    if (!window.confirm(`¿Aplicar ${repairPreview.length} correcciones de vínculos y nombres de artista? Comprueba que has guardado la copia JSON. No se modificarán las grabaciones ni los álbumes.`)) return;
-    setRunning(true);
-    let updated = 0, skipped = 0, failed = 0;
-    for (const repair of repairPreview) {
-      try {
-        const albumRef = doc(db, 'albums', repair.albumId);
-        const targetRef = doc(db, 'artists', repair.changes.artistId || repair.expectedArtistId);
-        const applied = await runTransaction(db, async transaction => {
-          // Both documents are read before any write; concurrent catalog edits are rejected.
-          const [albumSnapshot, targetSnapshot] = await Promise.all([
-            transaction.get(albumRef), transaction.get(targetRef)
-          ]);
-          if (!albumSnapshot.exists() || !targetSnapshot.exists() ||
-              !isRepairStillApplicable({ id: albumSnapshot.id, ...albumSnapshot.data() } as Album, repair)) return false;
-          const linked = targetSnapshot.data() as Artist;
-          if (repair.kind === 'fill-artist-name' && linked.name !== repair.changes.artistName) return false;
-          transaction.update(albumRef, repair.changes);
-          return true;
-        });
-        if (applied) updated++; else skipped++;
-      } catch (error) {
-        failed++;
-        console.error('Artist repair was not applied:', repair.albumId, error);
-      }
-    }
-    setRepairPreview(null);
-    setReport(null);
-    setMessage(`Correcciones aplicadas: ${updated}. Omitidas por cambios o datos no coincidentes: ${skipped}. Errores: ${failed}. Ejecuta Revisar catálogo otra vez.`);
-    setRunning(false);
-  };
-
   const fixRepeatedLabels = async () => {
     if (!backupDownloaded || running) return;
     if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
@@ -552,10 +501,6 @@ function CatalogMaintenance() {
             <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
             <button type="button" onClick={previewArtistRepairs} disabled={running}
               className="rounded-full border border-gold/50 text-ink px-4 py-3 text-sm disabled:opacity-50">Reparar enlaces de artistas</button>
-            <button type="button" onClick={previewArtistRepairs} disabled={running}
-              className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">
-              Revisar enlaces de artistas
-            </button>
             <button type="button" onClick={fixRepeatedLabels} disabled={running || !backupDownloaded}
               title={backupDownloaded ? 'Corregir sellos repetidos' : 'Descarga primero una copia de seguridad'}
               className="rounded-full border border-gold/50 text-gold px-4 py-3 text-sm disabled:opacity-40">
@@ -565,31 +510,6 @@ function CatalogMaintenance() {
         </div>
         <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
         {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
-        {repairPreview !== null && (
-          <div className="border-t border-ink/10 pt-3 space-y-3">
-            <h3 className="font-serif text-xl">Correcciones de artistas ({repairPreview.length})</h3>
-            <p className="text-xs text-ink/60">Se modificarán solamente referencias de artistas y nombres vacíos. Los créditos completos, directores, orquestas y pistas se conservan. Los registros que hayan cambiado desde la revisión se omitirán.</p>
-            <div className="max-h-64 overflow-y-auto divide-y divide-ink/10 border border-ink/10 rounded-xl">
-              {repairPreview.map(repair => (
-                <div key={repair.albumId} className="p-3 text-sm">
-                  <strong>{repair.title}</strong>
-                  <p className="text-ink/60">{repair.kind === 'fill-artist-name'
-                    ? 'Completar nombre: ' + repair.changes.artistName
-                    : 'Reenlazar al artista existente (sin borrar créditos): ' + repair.changes.artistId}</p>
-                </div>
-              ))}
-              {repairPreview.length === 0 && <p className="p-3 text-sm text-ink/60">No hay correcciones verificadas pendientes.</p>}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={!backupDownloaded || !repairPreview.length || running}
-                onClick={applyArtistRepairs} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-40">
-                Aplicar correcciones verificadas
-              </button>
-              <button type="button" onClick={() => setRepairPreview(null)} className="rounded-full border border-ink/20 px-4 py-3 text-sm">Cancelar</button>
-            </div>
-            {!backupDownloaded && <p className="text-xs text-ink/60">Antes de aplicar, descarga una copia JSON nueva en esta sesión.</p>}
-          </div>
-        )}
         {artistRepairs !== null && (
           <div className="border-t border-ink/10 pt-4 space-y-3">
             <h3 className="font-serif text-xl">Vista previa: correcciones de artistas ({artistRepairs.length})</h3>
