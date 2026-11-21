@@ -108,12 +108,11 @@ interface ParsedWordImport {
   rawText?: string;
   // Legacy client-side fields
   artist?: Partial<Artist>;
-  albums?: Partial<Album>[];
+  albums?: WordAlbumCandidate[];
   notes?: string[];
   // Actual server response fields
   composer?: ServerComposer;
   recordings?: ServerRecording[];
-  albums?: WordAlbumCandidate[];
   warnings?: string[];
   sourceFileName?: string;
 }
