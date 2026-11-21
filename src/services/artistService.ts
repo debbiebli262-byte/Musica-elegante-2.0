@@ -1,6 +1,7 @@
+import { privateApiFetch } from './privateApi';
 export async function fetchArtistMetadata(artistName: string) {
   try {
-    const response = await fetch(
+    const response = await privateApiFetch(
       `/api/artist-metadata?name=${encodeURIComponent(artistName)}`
     );
 
