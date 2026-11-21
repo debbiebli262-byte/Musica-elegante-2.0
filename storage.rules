@@ -1,14 +1,16 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function isAdmin() {
+    function isAllowedMember() {
       return request.auth != null
-        && request.auth.token.email == 'debbiebli262@gmail.com'
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'debbiebli262@gmail.com',
+          'javierblinder@yahoo.com.ar'
+        ];
     }
     match /{allPaths=**} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow read, write: if isAllowedMember();
     }
   }
 }
