@@ -3259,65 +3259,145 @@ function DiscogsImportPage() {
                   </div>
                 )}
               </div>
-              <Field label="Título del álbum" value={title} setValue={setTitle} />
-              <div className="space-y-2">
-                <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Género detectado</label>
-                <select value={genre} onChange={(e) => setGenre(e.target.value as Genre)} className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
-                  <option value="jazz">Jazz</option>
-                  <option value="classical">Música Clásica</option>
-                </select>
+              <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Título del álbum" value={title} setValue={setTitle}/>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Género</label>
+                  <select value={genre} onChange={e => setGenre(e.target.value as Genre)} className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
+                    <option value="jazz">Jazz</option>
+                    <option value="classical">Música Clásica</option>
+                  </select>
+                </div>
+                <Field label="Año de edición" value={releaseYear} setValue={setReleaseYear}/>
+                <Field label="Número de catálogo" value={catalogNumber} setValue={setCatalogNumber}/>
+                <div className="space-y-2 sm:col-span-2">
+                  <label htmlFor="import-sello" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">
+                    Sello discográfico {discogsLabelOptions.length > 1 ? '· Elige el de tu copia' : ''}
+                  </label>
+                  {discogsLabelOptions.length > 1 ? (
+                    <select id="import-sello" value={label}
+                      onChange={e => { setLabel(e.target.value); setOriginalLabel(e.target.value); }}
+                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
+                      <option value="">Seleccionar sello...</option>
+                      {discogsLabelOptions.map(item => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                  ) : <input id="import-sello" value={label} onChange={e => { setLabel(e.target.value); setOriginalLabel(e.target.value); }}
+                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3" />}
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Mi colección</label>
+                  <select value={collectionStatus} onChange={e => setCollectionStatus(e.target.value as 'none' | 'owned' | 'wishlist')}
+                    className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
+                    <option value="none">No agregar todavía</option>
+                    <option value="owned">En casa</option>
+                    <option value="wishlist">Deseados</option>
+                  </select>
+                </div>
+                <div className="flex items-end">
+                  <button type="button" onClick={() => setShowAdvancedDetails(value => !value)}
+                    className="w-full rounded-xl border border-ink/15 px-4 py-3 text-sm font-semibold hover:bg-ink/5">
+                    {showAdvancedDetails ? 'Ocultar detalles adicionales' : 'Ver y completar más datos'}
+                  </button>
+                </div>
               </div>
-              <Field label="Año" value={releaseYear} setValue={setReleaseYear} />
-              {discogsLabelOptions.length > 1 && (
-              <div className="space-y-2">
-                <label htmlFor="discogs-import-label" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">¿Qué sello tiene tu edición?</label>
-                <select id="discogs-import-label" required value={label} onChange={event => { setLabel(event.target.value); setOriginalLabel(event.target.value); }}
-                  className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
-                  <option value="">Selecciona un sello...</option>
-                  {discogsLabelOptions.map(option => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </div>
-            )}
-            <Field label="Sello" value={label} setValue={value => { setLabel(value); setOriginalLabel(value); }} />
-              <Field label="Nº catálogo" value={catalogNumber} setValue={setCatalogNumber} />
-              <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber} />
-              <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber} />
-              <Field label="Sello original" value={originalLabel} setValue={setOriginalLabel} />
-              <Field label="Año original" value={originalYear} setValue={setOriginalYear} />
-              <Field label="Año edición" value={editionDate} setValue={setEditionDate} />
-              <Field label="País" value={country} setValue={setCountry} />
-              <Field label="Formato(s), separado por coma" value={formatList} setValue={setFormatList} />
-              <Field label="Cantidad de discos" value={String(discCount)} setValue={(v) => setDiscCount(Number(v) || 1)} />
-              <Field label="Orquesta" value={orchestra} setValue={setOrchestra} />
-              <Field label="Director" value={conductor} setValue={setConductor} />
-              <Field label="Productor" value={producer} setValue={setProducer} />
-              <Field label="Ingeniero" value={engineer} setValue={setEngineer} />
-              <Field label="Mastering" value={masteringEngineer} setValue={setMasteringEngineer} />
-              <div className="space-y-2">
-                <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Agregar a mi colección</label>
-                <select value={collectionStatus} onChange={(e) => setCollectionStatus(e.target.value as 'none' | 'owned' | 'wishlist')} className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
-                  <option value="none">No agregar todavía</option>
-                  <option value="owned">En Casa</option>
-                  <option value="wishlist">Deseados</option>
-                </select>
-              </div>
+              {showAdvancedDetails && (
+                <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-ink/10 pt-5">
+                  <Field label="Fecha de publicación (AAAA-MM-DD)" value={releaseDate} setValue={setReleaseDate}/>
+                  <Field label="Fechas de grabación" value={recordingDates} setValue={setRecordingDates}/>
+                  <Field label="Lugar de grabación" value={location} setValue={setLocation}/>
+                  <Field label="País" value={country} setValue={setCountry}/>
+                  <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber}/>
+                  <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber}/>
+                  <Field label="Sello original" value={originalLabel} setValue={setOriginalLabel}/>
+                  <Field label="Año original" value={originalYear} setValue={setOriginalYear}/>
+                  <Field label="Fecha edición" value={editionDate} setValue={setEditionDate}/>
+                  <Field label="Formatos (separados por coma)" value={formatList} setValue={setFormatList}/>
+                  <Field label="Cantidad de discos" value={String(discCount)} setValue={v => setDiscCount(Math.max(1, Number(v) || 1))}/>
+                  <Field label="Orquesta" value={orchestra} setValue={setOrchestra}/>
+                  <Field label="Director" value={conductor} setValue={setConductor}/>
+                  <Field label="Productor" value={producer} setValue={setProducer}/>
+                  <Field label="Ingeniero" value={engineer} setValue={setEngineer}/>
+                  <Field label="Ingeniero de mastering" value={masteringEngineer} setValue={setMasteringEngineer}/>
+                  <div className="sm:col-span-2 space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Notas y comentarios</label>
+                    <textarea rows={3} value={anecdotes} onChange={e => setAnecdotes(e.target.value)}
+                      className="w-full bg-ink/5 rounded-xl px-4 py-3 text-sm" placeholder="Información adicional de tu copia"/>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          {allArtistNames.length > 0 && (
-            <div className="rounded-2xl bg-gold/5 border border-gold/10 p-5 text-sm text-ink/70">
-              Discogs encontró: {allArtistNames.join(', ')}. Puedes dejar esos artistas, quitarlos, agregar artistas existentes o escribir nuevos antes de guardar.
-            </div>
+          {allArtistNames.length > 1 && (
+            <p className="text-xs text-ink/50">Créditos identificados en Discogs: {allArtistNames.join(', ')}.</p>
           )}
 
-          <div className="rounded-2xl bg-ink/5 p-5 space-y-3">
-            <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Contenido encontrado</h3>
-            {genre === 'classical' ? (
-              <p className="text-sm text-ink/60">{discs.length} disco(s) / {discs.reduce((total, d) => total + (d.works?.reduce((sum, w) => sum + (w.movements?.length || 0), 0) || 0), 0)} movimientos.</p>
+          <section className="rounded-2xl border border-ink/10 bg-ink/[0.025] p-4 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-serif text-xl">Pistas encontradas</h3>
+                <p className="text-xs text-ink/50 mt-1">{genre === 'classical'
+                  ? `${discs.length} disco(s) · ${discs.reduce((total, d) => total + d.works.reduce((sum, w) => sum + w.movements.length, 0), 0)} movimientos`
+                  : `${tracks.length} pista(s)`}</p>
+              </div>
+              <button type="button" onClick={() => setShowTrackEditor(value => !value)}
+                className="rounded-full border border-ink/20 px-4 py-2 text-xs font-bold hover:bg-white">
+                {showTrackEditor ? 'Cerrar revisión' : 'Revisar y corregir pistas'}
+              </button>
+            </div>
+            {showTrackEditor && (genre === 'jazz' ? (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {tracks.map((track, index) => (
+                  <div key={index} className="grid grid-cols-[2rem_minmax(0,1fr)] sm:grid-cols-[2rem_minmax(0,1fr)_5rem] gap-2 items-center">
+                    <span className="text-xs text-ink/40">{track.trackNumber}</span>
+                    <input aria-label={`Título pista ${index + 1}`} value={track.title}
+                      onChange={e => setTracks(current => current.map((t, i) => i === index ? {...t, title:e.target.value} : t))}
+                      className="min-w-0 bg-white border border-ink/10 rounded-lg px-3 py-2 text-sm" />
+                    <input aria-label={`Duración pista ${index + 1}`} value={track.duration}
+                      onChange={e => setTracks(current => current.map((t, i) => i === index ? {...t, duration:e.target.value} : t))}
+                      placeholder="Duración" className="col-start-2 sm:col-start-auto min-w-0 bg-white border border-ink/10 rounded-lg px-2 py-2 text-sm" />
+                  </div>
+                ))}
+                {!tracks.length && <p className="text-sm text-ink/50">Discogs no devolvió pistas para esta edición.</p>}
+              </div>
             ) : (
-              <p className="text-sm text-ink/60">{tracks.length} pista(s).</p>
-            )}
-          </div>
+              <div className="space-y-4 max-h-[28rem] overflow-y-auto">
+                {discs.map((disc, d) => (
+                  <div key={d} className="rounded-xl bg-white p-3 space-y-3">
+                    <h4 className="font-semibold text-sm">Disco {disc.discNumber}</h4>
+                    {disc.works.map((work, w) => (
+                      <div key={w} className="space-y-2">
+                        <input aria-label={`Obra ${w + 1} disco ${d + 1}`} value={work.title}
+                          onChange={e => setDiscs(current => current.map((cd, di) => di !== d ? cd : ({
+                            ...cd, works: cd.works.map((cw, wi) => wi !== w ? cw : {...cw,title:e.target.value})
+                          })))} className="w-full min-w-0 bg-ink/5 rounded-lg px-3 py-2 font-medium text-sm" />
+                        {work.movements.map((movement, m) => (
+                          <div key={m} className="grid grid-cols-[2rem_minmax(0,1fr)] sm:grid-cols-[2rem_minmax(0,1fr)_5rem] gap-2 items-center">
+                            <span className="text-xs text-ink/40">{movement.trackNumber}</span>
+                            <input aria-label={`Movimiento ${m + 1}`} value={movement.title}
+                              onChange={e => setDiscs(current => current.map((cd, di) => di !== d ? cd : ({
+                                ...cd, works: cd.works.map((cw, wi) => wi !== w ? cw : ({
+                                  ...cw, movements: cw.movements.map((cm, mi) => mi !== m ? cm : {...cm,title:e.target.value})
+                                }))
+                              })))} className="min-w-0 bg-white border border-ink/10 rounded-lg px-3 py-2 text-sm" />
+                            <input aria-label={`Duración movimiento ${m + 1}`} value={movement.duration}
+                              onChange={e => setDiscs(current => current.map((cd, di) => di !== d ? cd : ({
+                                ...cd, works: cd.works.map((cw, wi) => wi !== w ? cw : ({
+                                  ...cw, movements: cw.movements.map((cm, mi) => mi !== m ? cm : {...cm,duration:e.target.value})
+                                }))
+                              })))} placeholder="Duración"
+                              className="col-start-2 sm:col-start-auto min-w-0 bg-white border border-ink/10 rounded-lg px-2 py-2 text-sm" />
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {!discs.length && <p className="text-sm text-ink/50">Discogs no devolvió obras o movimientos.</p>}
+              </div>
+            ))}
+            <p className="text-xs text-ink/50">Se guardarán las pistas de la edición seleccionada. Puedes corregir los títulos antes de aprobar.</p>
+          </section>
 
           <div className="flex flex-col sm:flex-row gap-3 justify-end border-t border-ink/10 pt-6">
             <button type="button" onClick={() => navigate('/')} className="px-6 py-3 rounded-full border border-ink/15 text-sm font-bold uppercase tracking-widest hover:bg-ink/5">Cancelar</button>
