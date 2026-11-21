@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { getCatalogRecordType, type CatalogRecordType } from './utils/catalogRecordType';
@@ -1422,6 +1423,7 @@ function ArtistDetail() {
   }
 
   const age = calculateAge(artist.birthDate, artist.deathDate);
+  const groupedAlbums = groupArtistAlbums(albums, sidemanAlbums, sharedAlbums);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '';
@@ -1521,13 +1523,13 @@ function ArtistDetail() {
             </div>
 
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
-              {albums.map((album) => (
+              {groupedAlbums.primary.map((album) => (
                 <div key={album.id}>
                   <AlbumCard album={album} />
                 </div>
               ))}
 
-              {albums.length === 0 && (
+              {groupedAlbums.primary.length === 0 && (
                 <p className="col-span-full text-ink/40 font-serif italic">
                   No hay álbumes principales registrados.
                 </p>
@@ -1535,13 +1537,13 @@ function ArtistDetail() {
             </div>
           </div>
 
-          {sidemanAlbums.length > 0 && (
+          {groupedAlbums.collaborations.length > 0 && (
             <div className="space-y-8">
               <h2 className="text-xs uppercase tracking-widest font-bold text-gold">
                 Colaboraciones (Sideman)
               </h2>
               <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
-                {sidemanAlbums.map((album) => (
+                {groupedAlbums.collaborations.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} />
                   </div>
@@ -1550,7 +1552,7 @@ function ArtistDetail() {
             </div>
           )}
 
-          {sharedAlbums.length > 0 && (
+          {groupedAlbums.otherShared.length > 0 && (
             <div className="space-y-8">
               <h2 className="text-xs uppercase tracking-widest font-bold text-gold">
                 Álbumes Compartidos
@@ -1559,7 +1561,7 @@ function ArtistDetail() {
                 Estos discos incluyen grabaciones de varios artistas. Las grabaciones de {artist?.name} están destacadas en dorado.
               </p>
               <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
-                {sharedAlbums.map((album) => (
+                {groupedAlbums.otherShared.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} highlightArtistId={id} />
                   </div>
@@ -3437,7 +3439,7 @@ function CollectionPage() {
         return { ...item, album: { id: albumDoc.id, ...albumDoc.data() } as Album };
       }));
 
-      setItems(enrichedItems);
+      setItems(uniqueCollectionItems(enrichedItems.filter(item => Boolean(item.album?.title))));
       setLoading(false);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'collection');
@@ -4769,6 +4771,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [barcodeNumber, setBarcodeNumber] = useState('');
   const [discogsUrl, setDiscogsUrl] = useState('');
   const [allArtistIds, setAllArtistIds] = useState<string[]>(album?.allArtistIds || []);
+  const [artistLinkToAdd, setArtistLinkToAdd] = useState('');
   const [artistName, setArtistName] = useState(album?.artistName || '');
   const [recordingDates, setRecordingDates] = useState(album?.recordingDates || '');
   const [releaseDate, setReleaseDate] = useState(album?.releaseDate || '');
@@ -5178,7 +5181,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         tracks,
         discs,
         anecdotes,
-        allArtistIds,
+        allArtistIds: linkedArtistIds(artistId, allArtistIds),
       };
       if (album) {
         await updateDoc(doc(db, 'albums', album.id), data);
@@ -5339,6 +5342,49 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                   <datalist id="artist-name-list">
                     {Array.from(new Set(allArtists.map(a => a.name).filter(Boolean))).map(v => <option key={v} value={v} />)}
                   </datalist>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-2xl border border-ink/10 bg-ink/[0.025] p-4 sm:p-5">
+                <div>
+                  <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Artistas vinculados a este álbum</h3>
+                  <p className="mt-1 text-xs text-ink/50">
+                    Un solo álbum en la colección, visible también en las páginas de los artistas seleccionados.
+                    No se crean copias del disco.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {linkedArtistIds(artistId, allArtistIds).map(id => {
+                    const associated = allArtists.find(a => a.id === id);
+                    return (
+                      <span key={id} className="inline-flex max-w-full items-center gap-2 rounded-full border border-ink/10 bg-white px-3 py-2 text-xs">
+                        <span className="truncate">{associated?.name || (id === artistId ? artistName : id)}{id === artistId ? ' · Principal' : ''}</span>
+                        {id !== artistId && (
+                          <button type="button" aria-label={`Desvincular ${associated?.name || id}`}
+                            onClick={() => setAllArtistIds(current => current.filter(item => item !== id))}>
+                            <X size={14}/>
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 min-w-0">
+                  <select aria-label="Vincular otro artista" value={artistLinkToAdd}
+                    onChange={event => setArtistLinkToAdd(event.target.value)}
+                    className="min-w-0 flex-1 rounded-xl bg-white border border-ink/10 px-3 py-3 text-sm">
+                    <option value="">Seleccionar otro artista...</option>
+                    {allArtists.filter(a => !linkedArtistIds(artistId, allArtistIds).includes(a.id))
+                      .map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <button type="button" disabled={!artistLinkToAdd}
+                    onClick={() => {
+                      setAllArtistIds(current => linkedArtistIds(artistId, [...current, artistLinkToAdd]));
+                      setArtistLinkToAdd('');
+                    }}
+                    className="rounded-xl bg-ink px-4 py-3 text-xs font-semibold text-white disabled:opacity-40">
+                    Vincular artista
+                  </button>
                 </div>
               </div>
 
