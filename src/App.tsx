@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { wordAlbumCandidates, sameWordEdition, mayReplaceBiography, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
@@ -86,6 +87,7 @@ interface ServerRecording {
   albumSubtitle?: string;
   label?: string;
   catalogNumber?: string;
+  barcode?: string;
   format?: string;
   editionYear?: string;
   country?: string;
@@ -111,6 +113,7 @@ interface ParsedWordImport {
   // Actual server response fields
   composer?: ServerComposer;
   recordings?: ServerRecording[];
+  albums?: WordAlbumCandidate[];
   warnings?: string[];
   sourceFileName?: string;
 }
@@ -2243,6 +2246,16 @@ function ImportWordPage() {
   const [message, setMessage] = useState<string>('');
   const [copied, setCopied] = useState(false);
   const [importGenreSelection, setImportGenreSelection] = useState<Genre>('classical');
+  const [discogsMatches, setDiscogsMatches] = useState<Record<string, Array<{id:number;title:string;year:string;catno:string;labels:string[];formats:string[]}>>>({});
+  const [discogsSelection, setDiscogsSelection] = useState<Record<string,string>>({});
+  const [enrichedWordAlbums, setEnrichedWordAlbums] = useState<Record<string, WordAlbumCandidate & {
+    imageUrl?: string; discogsReleaseId?: number; discs?: Disc[]; tracks?: Track[];
+    producer?: string; engineer?: string; conductor?: string; orchestra?: string;
+  }>>({});
+  const [enrichingAlbum, setEnrichingAlbum] = useState('');
+  const [enrichMessage, setEnrichMessage] = useState('');
+  const extractedCandidates = wordAlbumCandidates(parsedData?.albums || [], parsedData?.recordings || []);
+  const albumsForImport = extractedCandidates.map(item => enrichedWordAlbums[normalizedEditionKey(item)] || item);
 
   useEffect(() => {
     const importsQuery = query(collection(db, 'import_jobs'));
@@ -2261,6 +2274,10 @@ function ImportWordPage() {
     setSelectedFile(file);
     setParsedData(null);
     setMessage('');
+    setDiscogsMatches({});
+    setDiscogsSelection({});
+    setEnrichedWordAlbums({});
+    setEnrichMessage('');
   };
 
   const handleProcessFile = async () => {
@@ -2280,6 +2297,75 @@ function ImportWordPage() {
       setMessage(error instanceof Error ? error.message : 'No se pudo procesar el archivo.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const lookupWordAlbum = async (album: WordAlbumCandidate) => {
+    const key = normalizedEditionKey(album);
+    const identifier = album.barcode || album.catalogNumber;
+    if (!identifier) {
+      setEnrichMessage('El álbum necesita un código de barras o número de catálogo para buscar en Discogs.');
+      return;
+    }
+    setEnrichingAlbum(key);
+    setEnrichMessage('');
+    try {
+      const param = album.barcode ? 'barcode' : 'catno';
+      const response = await privateApiFetch('/api/discogs-search-by-catalog?' + param + '=' + encodeURIComponent(identifier));
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error || 'No se encontró en Discogs.');
+      const candidates = (Array.isArray(result.candidates) ? result.candidates : []).filter((item: {labels:string[];formats:string[]}) => {
+        const labelMatch = !album.label || item.labels.some(label => label.toLowerCase() === album.label.toLowerCase());
+        const documentFormat = album.format.toLowerCase();
+        const formatMatch = !documentFormat || item.formats.some(format =>
+          format.toLowerCase().includes(documentFormat) || documentFormat.includes(format.toLowerCase()));
+        return labelMatch && formatMatch;
+      });
+      setDiscogsMatches(current => ({...current, [key]: candidates}));
+      setEnrichMessage(candidates.length ? 'Elige la edición exacta antes de completar sus datos.' :
+        'No se encontraron ediciones compatibles con el sello/formato del documento. Conservamos los datos originales.');
+    } catch (error) {
+      setEnrichMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEnrichingAlbum('');
+    }
+  };
+
+  const confirmWordDiscogsRelease = async (album: WordAlbumCandidate) => {
+    const key = normalizedEditionKey(album);
+    const releaseId = discogsSelection[key];
+    if (!releaseId || !discogsMatches[key]?.some(item => String(item.id) === releaseId)) return;
+    setEnrichingAlbum(key);
+    setEnrichMessage('');
+    try {
+      const response = await privateApiFetch('/api/discogs-search-by-catalog?releaseId=' + encodeURIComponent(releaseId));
+      const found = await response.json();
+      if (!response.ok) throw new Error(found?.error || 'No se pudo cargar la edición.');
+      if (album.catalogNumber && found.catno &&
+          album.catalogNumber.replace(/[\s-]/g, '').toLowerCase() !==
+          String(found.catno).replace(/[\s-]/g, '').toLowerCase()) {
+        throw new Error('El número de catálogo no coincide con el documento. Revisa la edición.');
+      }
+      setEnrichedWordAlbums(current => ({...current, [key]: {
+        ...album,
+        title: album.title || found.title || '',
+        label: album.label || String(found.label || '').split(',')[0].trim(),
+        catalogNumber: album.catalogNumber || found.catno || '',
+        editionYear: album.editionYear || String(found.year || ''),
+        country: album.country || found.country || '',
+        discCount: album.discCount || found.discCount || 1,
+        imageUrl: found.coverImage || found.thumb || '',
+        discogsReleaseId: Number(releaseId),
+        discs: Array.isArray(found.discs) ? found.discs : [],
+        tracks: Array.isArray(found.tracks) ? found.tracks : [],
+        producer: found.producer || '', engineer: found.engineer || '',
+        orchestra: found.orchestra || '', conductor: found.conductor || '',
+      }}));
+      setEnrichMessage('Edición verificada en Discogs. Los datos del Word tienen prioridad.');
+    } catch (error) {
+      setEnrichMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEnrichingAlbum('');
     }
   };
 
