@@ -36,11 +36,21 @@ export function wordAlbumCandidates(albums: Partial<WordAlbumCandidate>[], recor
       country: String(source.country || ''), discCount: Number(source.discCount) || 1,
       notes: String(source.notes || ''),
     };
-    const key = normalizedEditionKey(candidate);
-    const previous = result.get(key);
+    // Group only compatible records; an empty label/format means unknown, not a new edition.
+    const id = norm(candidate.catalogNumber || candidate.barcode || candidate.title);
+    const existingEntry = [...result.entries()].find(([, stored]) =>
+      norm(stored.catalogNumber || stored.barcode || stored.title) === id &&
+      (!stored.label || !candidate.label || norm(stored.label) === norm(candidate.label)) &&
+      (!stored.format || !candidate.format || norm(stored.format) === norm(candidate.format)));
+    const key = existingEntry?.[0] || normalizedEditionKey(candidate);
+    const previous = existingEntry?.[1] || result.get(key);
     if (!previous) result.set(key, candidate);
-    else result.set(key, Object.fromEntries(Object.entries(previous).map(([k, v]) =>
-      [k, v || candidate[k as keyof WordAlbumCandidate]])) as unknown as WordAlbumCandidate);
+    else result.set(key, {
+      ...previous,
+      ...Object.fromEntries(Object.entries(candidate).filter(([field, value]) =>
+        (!previous[field as keyof WordAlbumCandidate] || previous[field as keyof WordAlbumCandidate] === 1) &&
+        value !== '' && value !== 0)),
+    } as WordAlbumCandidate);
   };
   albums.forEach(add);
   recordings.forEach(rec => {
@@ -53,9 +63,15 @@ export function wordAlbumCandidates(albums: Partial<WordAlbumCandidate>[], recor
   return [...result.values()];
 }
 export function sameWordEdition(album: WordAlbumCandidate, rec: WordRecordingReference) {
-  if (rec.catalogNumber && album.catalogNumber) return norm(rec.catalogNumber) === norm(album.catalogNumber);
-  if (rec.barcode && album.barcode) return norm(rec.barcode) === norm(album.barcode);
-  return Boolean(rec.albumTitle && album.title && norm(rec.albumTitle) === norm(album.title));
+  if (rec.catalogNumber && album.catalogNumber && norm(rec.catalogNumber) !== norm(album.catalogNumber)) return false;
+  if (rec.barcode && album.barcode && norm(rec.barcode) !== norm(album.barcode)) return false;
+  if (rec.label && album.label && norm(rec.label) !== norm(album.label)) return false;
+  if (rec.format && album.format && norm(rec.format) !== norm(album.format)) return false;
+  return Boolean(
+    (rec.catalogNumber && album.catalogNumber) ||
+    (rec.barcode && album.barcode) ||
+    (rec.albumTitle && album.title && norm(rec.albumTitle) === norm(album.title))
+  );
 }
 export function mayReplaceBiography(existing: string | undefined, proposed: string, confirmed: boolean) {
   return Boolean(proposed.trim()) && (!existing?.trim() || confirmed);
