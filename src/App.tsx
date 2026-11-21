@@ -1784,7 +1784,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
   }
 
   return (
-    <div className="group space-y-3">
+    <div className="group min-w-0 space-y-3">
       <div 
         onClick={() => setIsViewing(true)}
         className="relative aspect-square rounded-xl overflow-hidden bg-ink/5 shadow-md group-hover:shadow-xl transition-all duration-500 cursor-pointer"
@@ -1825,11 +1825,14 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
           </div>
         )}
       </div>
-      <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
+      <div className="min-w-0 space-y-1 overflow-hidden cursor-pointer" onClick={() => setIsViewing(true)}>
         <h4 className="block w-full min-w-0 truncate font-serif text-lg leading-tight group-hover:text-gold transition-colors" title={album.title}>{album.title}</h4>
-        <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
-          <p className="text-xs uppercase tracking-wide text-ink/60 font-bold truncate flex-1 mr-2">{artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}</p>
-          <p className="text-xs uppercase tracking-wide text-ink/50 font-bold whitespace-nowrap">
+        <div className="min-w-0 space-y-1">
+          <p className="block w-full min-w-0 truncate text-xs uppercase tracking-wide text-ink/60 font-bold" title={artistName}>
+            {artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}
+          </p>
+          <p className="block w-full min-w-0 truncate text-xs uppercase tracking-wide text-ink/50 font-bold"
+            title={[album.releaseYear, album.label].filter(Boolean).join(' • ')}>
             {[album.releaseYear, album.label].filter(Boolean).join(' • ')}
           </p>
         </div>
