@@ -181,6 +181,7 @@ Al final, devuélveme únicamente el texto reorganizado, sin explicaciones adici
 
 function Navbar() {
   const location = useLocation();
+  const { logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -221,6 +222,10 @@ function Navbar() {
         </div>
 
         
+        <button type="button" onClick={() => void logout()}
+          className="hidden md:inline-flex items-center gap-2 rounded-full border border-ink/10 px-4 py-2 text-xs uppercase tracking-wider hover:text-gold">
+          <LogOut size={16} /> Salir
+        </button>
         <button
           type="button"
           onClick={() => setMobileMenuOpen((prev) => !prev)}
@@ -255,6 +260,9 @@ function Navbar() {
                   {item.name}
                 </Link>
               ))}
+              <button type="button" onClick={() => void logout()} className="text-left px-5 py-4 border-t border-ink/10 text-sm uppercase tracking-wider">
+                Salir
+              </button>
             </div>
           </motion.div>
         )}
