@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -1819,7 +1820,7 @@ async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch('/api/import-word', {
+  const response = await privateApiFetch('/api/import-word', {
     method: 'POST',
     body: formData,
   });
@@ -2578,7 +2579,7 @@ function DiscogsImportPage() {
       const param = searchMode === 'barcode'
         ? `barcode=${encodeURIComponent(value)}`
         : `catno=${encodeURIComponent(value)}`;
-      const response = await fetch(`/api/discogs-search-by-catalog?${param}`);
+      const response = await privateApiFetch(`/api/discogs-search-by-catalog?${param}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || 'No se pudo buscar en Discogs.');
 
@@ -3142,7 +3143,7 @@ try {
     if (!imageUrl || imageUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i)) return;
     setResolving(true);
     try {
-      const response = await fetch(`/api/resolve-image?url=${encodeURIComponent(imageUrl)}`);
+      const response = await privateApiFetch(`/api/resolve-image?url=${encodeURIComponent(imageUrl)}`);
       if (response.ok) {
         const data = await response.json();
         if (data.imageUrl) {
@@ -4334,7 +4335,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         ? `barcode=${encodeURIComponent(searchValue)}`
         : `catno=${encodeURIComponent(searchValue)}`;
 
-      const response = await fetch(`/api/discogs-search-by-catalog?${param}`);
+      const response = await privateApiFetch(`/api/discogs-search-by-catalog?${param}`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -4446,7 +4447,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     if (!imageUrl || imageUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i)) return;
     setResolving(true);
     try {
-      const response = await fetch(`/api/resolve-image?url=${encodeURIComponent(imageUrl)}`);
+      const response = await privateApiFetch(`/api/resolve-image?url=${encodeURIComponent(imageUrl)}`);
       if (response.ok) {
         const data = await response.json();
         if (data.imageUrl) {
