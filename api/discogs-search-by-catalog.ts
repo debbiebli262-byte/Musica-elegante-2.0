@@ -1,3 +1,4 @@
+import { requireLibraryMember } from './_auth';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 type DiscogsArtist = {
@@ -248,6 +249,7 @@ function guessDiscCount(releaseData: any, found: any) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (!(await requireLibraryMember(req, res))) return;
   try {
     const rawCatno = String(req.query.catno || req.query.barcode || "").trim();
     const searchMode = req.query.barcode ? "barcode" : "catno";
