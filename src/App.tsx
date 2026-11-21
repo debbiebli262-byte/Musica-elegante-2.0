@@ -335,6 +335,10 @@ function CatalogMaintenance() {
   const [message, setMessage] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [backupDownloaded, setBackupDownloaded] = useState(false);
+  const [dateProposals, setDateProposals] = useState<Array<{
+    artistId: string; name: string; birthDate?: string; deathDate?: string; source: string
+  }> | null>(null);
+  const [dateProgress, setDateProgress] = useState('');
   const [artistRepairs, setArtistRepairs] = useState<ArtistRepair[] | null>(null);
   const [tracklistProposals, setTracklistProposals] = useState<VerifiedTracklistProposal[] | null>(null);
 
@@ -397,6 +401,88 @@ function CatalogMaintenance() {
       console.error('Catalog audit failed', error);
       setMessage('No se pudo completar la revisión. No se modificó ningún registro.');
     } finally { setRunning(false); }
+  };
+
+  const reviewMissingDates = async () => {
+    if (running) return;
+    setRunning(true);
+    setDateProposals(null);
+    try {
+      const snapshot = await getDocs(collection(db, 'artists'));
+      const candidates = snapshot.docs.map(item => ({ id: item.id, ...item.data() } as Artist))
+        .filter(artist => artist.name?.trim() && (!artist.birthDate?.trim() || !artist.deathDate?.trim()));
+      const proposals: Array<{ artistId: string; name: string; birthDate?: string; deathDate?: string; source: string }> = [];
+      let completed = 0;
+      let lookupErrors = 0;
+      // Keep requests modest; only propose exact, full Wikidata dates verified for humans.
+      for (let offset = 0; offset < candidates.length; offset += 3) {
+        const group = candidates.slice(offset, offset + 3);
+        await Promise.all(group.map(async artist => {
+          try {
+            const response = await privateApiFetch('/api/artist-dates?name=' + encodeURIComponent(artist.name));
+            if (!response.ok) { lookupErrors++; return; }
+            const result = await response.json() as {
+              birthDate?: string; deathDate?: string; source?: string
+            };
+            if (!result.source?.startsWith('https://www.wikidata.org/wiki/Q')) return;
+            const birthDate = !artist.birthDate?.trim() ? result.birthDate : undefined;
+            const deathDate = !artist.deathDate?.trim() ? result.deathDate : undefined;
+            if (birthDate || deathDate) {
+              proposals.push({ artistId: artist.id, name: artist.name, birthDate, deathDate, source: result.source });
+            }
+          } catch (error) {
+            console.warn('Artist date lookup failed', artist.name, error);
+            lookupErrors++;
+          } finally { completed++; }
+        }));
+        setDateProgress(`Consultados ${completed} de ${candidates.length} artistas...`);
+      }
+      proposals.sort((a, b) => a.name.localeCompare(b.name));
+      setDateProposals(proposals);
+      setMessage(`${proposals.length} fichas con fechas verificadas propuestas. ${lookupErrors} consultas fallidas. Ningún dato fue modificado.`);
+    } catch (error) {
+      console.error('Cannot inspect artist dates', error);
+      setMessage('No se pudo consultar la lista de artistas. No se modificó nada.');
+    } finally {
+      setRunning(false);
+      setDateProgress('');
+    }
+  };
+
+  const applyMissingDates = async () => {
+    if (running || !backupDownloaded || !dateProposals?.length) return;
+    if (!window.confirm(`¿Guardar fechas verificadas en ${dateProposals.length} fichas? Sólo se completarán campos vacíos. Se conservarán los datos existentes.`)) return;
+    setRunning(true);
+    let updated = 0, skipped = 0, failed = 0;
+    for (const proposal of dateProposals) {
+      try {
+        const artistRef = doc(db, 'artists', proposal.artistId);
+        const didUpdate = await runTransaction(db, async transaction => {
+          const snapshot = await transaction.get(artistRef);
+          if (!snapshot.exists() || snapshot.data().name !== proposal.name) return false;
+          const current = snapshot.data();
+          const changes: Record<string, string> = {};
+          if (proposal.birthDate && !current.birthDate) {
+            changes.birthDate = proposal.birthDate;
+            changes.birthDateSource = proposal.source;
+          }
+          if (proposal.deathDate && !current.deathDate) {
+            changes.deathDate = proposal.deathDate;
+            changes.deathDateSource = proposal.source;
+          }
+          if (!Object.keys(changes).length) return false;
+          transaction.update(artistRef, changes);
+          return true;
+        });
+        if (didUpdate) updated++; else skipped++;
+      } catch (error) {
+        console.error('Date update not applied', proposal.artistId, error);
+        failed++;
+      }
+    }
+    setDateProposals(null);
+    setMessage(`Fechas completadas: ${updated} artistas. Omitidos: ${skipped}. Errores: ${failed}. No se sobreescribieron fechas anteriores.`);
+    setRunning(false);
   };
 
   const downloadAuditReport = () => {
@@ -569,6 +655,10 @@ function CatalogMaintenance() {
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={downloadBackup} disabled={running} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-50">Descargar copia JSON</button>
             <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
+            <button type="button" onClick={reviewMissingDates} disabled={running}
+              className="rounded-full border border-gold/50 px-4 py-3 text-sm disabled:opacity-50">
+              Completar fechas de artistas
+            </button>
             <button type="button" onClick={previewArtistRepairs} disabled={running}
               className="rounded-full border border-gold/50 text-ink px-4 py-3 text-sm disabled:opacity-50">Reparar enlaces de artistas</button>
             <button type="button" onClick={previewTracklistEnrichment} disabled={running}
@@ -584,6 +674,34 @@ function CatalogMaintenance() {
         </div>
         <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
         {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
+        {dateProgress && <p role="status" className="text-sm text-ink/60">{dateProgress}</p>}
+        {dateProposals !== null && (
+          <div className="space-y-3 border-t border-ink/10 pt-4">
+            <h3 className="font-serif text-xl">Fechas contrastadas ({dateProposals.length})</h3>
+            <p className="text-sm text-ink/60">Sólo personas con una coincidencia exacta, fecha completa y referencia en Wikidata. Las agrupaciones y las fechas inciertas se omiten. Revisa las fuentes antes de guardar.</p>
+            <div className="max-h-72 overflow-y-auto divide-y divide-ink/10 rounded-xl border border-ink/10">
+              {dateProposals.map(proposal => (
+                <div key={proposal.artistId} className="p-3 text-sm space-y-1">
+                  <strong>{proposal.name}</strong>
+                  <p className="text-ink/70">{proposal.birthDate ? 'Nacimiento: ' + proposal.birthDate : ''}
+                    {proposal.birthDate && proposal.deathDate ? ' · ' : ''}
+                    {proposal.deathDate ? 'Fallecimiento: ' + proposal.deathDate : ''}</p>
+                  <a href={proposal.source} target="_blank" rel="noopener noreferrer" className="text-gold underline">Ver fuente en Wikidata</a>
+                </div>
+              ))}
+              {!dateProposals.length && <p className="p-3 text-sm text-ink/60">No se encontraron fechas completas con coincidencia segura.</p>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={running || !backupDownloaded || !dateProposals.length}
+                onClick={applyMissingDates} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-40">
+                Guardar fechas verificadas
+              </button>
+              <button type="button" onClick={() => setDateProposals(null)}
+                className="rounded-full border border-ink/20 px-4 py-3 text-sm">Cancelar</button>
+            </div>
+            {!backupDownloaded && <p className="text-sm text-ink/60">Descarga primero una copia JSON nueva en esta sesión.</p>}
+          </div>
+        )}
         {tracklistProposals !== null && (
           <div className="border-t border-ink/10 pt-3 space-y-3">
             <h3 className="font-serif text-xl">Pistas verificadas ({tracklistProposals.length})</h3>
