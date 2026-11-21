@@ -254,7 +254,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawCatno = String(req.query.catno || req.query.barcode || "").trim();
     const searchMode = req.query.barcode ? "barcode" : "catno";
 
-    if (!rawCatno) {
+    const requestedId = typeof req.query.releaseId === 'string' ? req.query.releaseId : '';
+    if (requestedId && !/^\d{1,12}$/.test(requestedId)) {
+      return res.status(400).json({ error: "Invalid Discogs release identifier" });
+    }
+    if (!rawCatno && !requestedId) {
       return res.status(400).json({ error: "Catalog number or barcode is required" });
     }
 
@@ -293,12 +297,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     let found: any = null;
+    let candidates: Array<{ id: number; title: string; year: string; catno: string; labels: string[]; formats: string[] }> = [];
 
-    for (const attempt of searchAttempts) {
+    for (const attempt of requestedId ? [] : searchAttempts) {
       const searchUrl = new URL("https://api.discogs.com/database/search");
       searchUrl.searchParams.set(attempt.key, attempt.value);
       searchUrl.searchParams.set("type", "release");
-      searchUrl.searchParams.set("per_page", "10");
+      searchUrl.searchParams.set("per_page", "50");
 
       const response = await fetch(searchUrl.toString(), {
         headers: {
@@ -316,18 +321,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const data = await response.json();
 
       if (data.results?.length) {
+        candidates = data.results.filter((item: any) => Number.isSafeInteger(item.id) && item.id > 0).map((item: any) => ({
+          id: item.id,
+          title: String(item.title || ''),
+          year: String(item.year || ''),
+          catno: String(item.catno || ''),
+          labels: Array.isArray(item.label) ? item.label.map(String).filter(Boolean) : [],
+          formats: Array.isArray(item.format) ? item.format.map(String).filter(Boolean) : [],
+        }));
         found = data.results[0];
         break;
       }
     }
 
-    if (!found) {
+    if (!found && !requestedId) {
       return res.status(404).json({ error: "No Discogs release found" });
     }
 
-    const releaseUrl =
-      found.resource_url ||
-      (found.id ? `https://api.discogs.com/releases/${found.id}` : "");
+    // Explicit selection always fetches the exact release, not the first fuzzy search result.
+    const releaseUrl = requestedId
+      ? `https://api.discogs.com/releases/${requestedId}`
+      : (found.resource_url || `https://api.discogs.com/releases/${found.id}`);
 
     let releaseData: any = null;
 
@@ -345,6 +359,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const text = await releaseResponse.text();
         console.error("Discogs release error:", text);
       }
+    }
+
+    if (!releaseData && requestedId) {
+      return res.status(502).json({ error: "Could not load the selected Discogs release" });
+    }
+    if (requestedId) {
+      found = {
+        id: releaseData.id,
+        title: releaseData.title,
+        year: releaseData.year,
+        catno: releaseData.labels?.[0]?.catno,
+        label: releaseData.labels?.map((item: DiscogsLabel) => item.name),
+        format: releaseData.formats?.map((item: {name?: string}) => item.name),
+        cover_image: releaseData.images?.[0]?.uri,
+        uri: releaseData.uri?.replace('https://www.discogs.com', ''),
+      };
     }
 
     const rawTracklist = flattenDiscogsTracklist(releaseData?.tracklist || []);
@@ -431,9 +461,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       producer: findExtraArtistNames(combinedExtraArtists, ["producer", "produced by"]),
       engineer: findExtraArtistNames(combinedExtraArtists, ["engineer", "recorded by", "recording engineer"]),
       masteringEngineer: findExtraArtistNames(combinedExtraArtists, ["mastered by", "mastering"]),
-      originalLabel: labelNames,
-      originalCatalogNumber: mainCatno,
-      originalYear: releaseData?.year || found.year || "",
+      // A selected edition does not establish the first/original edition.
+      originalLabel: "",
+      originalCatalogNumber: "",
+      originalYear: "",
+      releaseId: releaseData?.id || found.id,
+      candidates,
       rawTracklist,
       tracks,
       discs,

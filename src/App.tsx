@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
@@ -2853,6 +2854,14 @@ function DiscogsImportPage() {
   const [country, setCountry] = useState('');
   const [label, setLabel] = useState('');
   const [discogsLabelOptions, setDiscogsLabelOptions] = useState<string[]>([]);
+  const [editionCandidates, setEditionCandidates] = useState<DiscogsEditionCandidate[]>([]);
+  const [editionDialogOpen, setEditionDialogOpen] = useState(false);
+  const [editionConfirmed, setEditionConfirmed] = useState(false);
+  const [editionLabel, setEditionLabel] = useState('');
+  const [editionFormat, setEditionFormat] = useState<'CD' | 'Vinilo' | ''>('');
+  const [editionReleaseId, setEditionReleaseId] = useState('');
+  const [editionLoading, setEditionLoading] = useState(false);
+  const [editionError, setEditionError] = useState('');
   const [catalogNumber, setCatalogNumber] = useState('');
   const [originalCatalogNumber, setOriginalCatalogNumber] = useState('');
   const [editionCatalogNumber, setEditionCatalogNumber] = useState('');
@@ -2910,6 +2919,13 @@ function DiscogsImportPage() {
     setCountry('');
     setLabel('');
     setDiscogsLabelOptions([]);
+    setEditionCandidates([]);
+    setEditionDialogOpen(false);
+    setEditionConfirmed(false);
+    setEditionLabel('');
+    setEditionFormat('');
+    setEditionReleaseId('');
+    setEditionError('');
     setCatalogNumber('');
     setOriginalCatalogNumber('');
     setEditionCatalogNumber('');
@@ -2978,24 +2994,7 @@ function DiscogsImportPage() {
     setArtistToAdd('');
   };
 
-  const fetchFromDiscogs = async () => {
-    const value = searchValue.trim();
-    if (!value) {
-      alert(searchMode === 'barcode' ? 'Introduce un código de barras.' : 'Introduce un número de catálogo.');
-      return;
-    }
-
-    setLoading(true);
-    setMessage('');
-    setImportError('');
-    try {
-      const param = searchMode === 'barcode'
-        ? `barcode=${encodeURIComponent(value)}`
-        : `catno=${encodeURIComponent(value)}`;
-      const response = await privateApiFetch(`/api/discogs-search-by-catalog?${param}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || 'No se pudo buscar en Discogs.');
-
+  const applyDiscogsData = (data: any, value: string) => {
       const detectedGenre: Genre = data.isClassical ? 'classical' : 'jazz';
       setGenre(detectedGenre);
       const foundArtistNames = Array.isArray(data.allArtistNames) && data.allArtistNames.length ? data.allArtistNames : [data.artist].filter(Boolean);
@@ -3018,11 +3017,11 @@ function DiscogsImportPage() {
       setDiscogsLabelOptions(labelOptions);
       const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
       setLabel(onlyLabel);
-      setOriginalLabel(onlyLabel);
+      setOriginalLabel(data.originalLabel || '');
       setCatalogNumber(data.catno || value);
       setEditionCatalogNumber(data.catno || value);
-      setOriginalCatalogNumber(data.originalCatalogNumber || data.catno || '');
-      setOriginalYear(data.originalYear ? String(data.originalYear) : (data.year ? String(data.year) : ''));
+      setOriginalCatalogNumber(data.originalCatalogNumber || '');
+      setOriginalYear(data.originalYear ? String(data.originalYear) : '');
       setImageUrl(data.coverImage || data.thumb || '');
       setDiscogsUrl(data.discogsUrl || '');
       setAllArtistNames(cleanFoundArtistNames);
@@ -3039,7 +3038,70 @@ function DiscogsImportPage() {
       setTracks(Array.isArray(data.tracks) ? data.tracks : []);
       setDiscs(Array.isArray(data.discs) ? data.discs : []);
 
-      setMessage(`Datos cargados desde Discogs. Género detectado: ${detectedGenre === 'classical' ? 'Música Clásica' : 'Jazz'}. Revisa y edita antes de guardar.`);
+      setMessage('Datos de Discogs cargados. Revisa la edición antes de guardar.');
+  };
+
+  const matchingCandidates = matchingDiscogsEditions(editionCandidates, editionLabel, editionFormat);
+
+  const confirmEdition = async () => {
+    const selectedId = editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '');
+    if (!editionLabel || !editionFormat || !selectedId ||
+        !matchingCandidates.some(candidate => String(candidate.id) === selectedId)) {
+      setEditionError('Selecciona el sello, el formato y una edición de Discogs.');
+      return;
+    }
+    setEditionLoading(true);
+    setEditionError('');
+    try {
+      const response = await privateApiFetch('/api/discogs-search-by-catalog?releaseId=' + encodeURIComponent(selectedId));
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'No se pudo cargar la edición.');
+      if (!getDiscogsLabelOptions(data.label).includes(editionLabel) ||
+          !String(data.format || '').split(',').some((item: string) => discogsPhysicalFormat(item) === editionFormat)) {
+        throw new Error('La edición no coincide con el sello y formato elegidos.');
+      }
+      applyDiscogsData(data, searchValue.trim());
+      setLabel(editionLabel);
+      setFormats([editionFormat]);
+      setEditionReleaseId(selectedId);
+      setCollectionStatus('owned');
+      setEditionConfirmed(true);
+      setEditionDialogOpen(false);
+    } catch (error) {
+      setEditionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEditionLoading(false);
+    }
+  };
+
+  const fetchFromDiscogs = async () => {
+    const value = searchValue.trim();
+    if (!value) {
+      alert(searchMode === 'barcode' ? 'Introduce un código de barras.' : 'Introduce un número de catálogo.');
+      return;
+    }
+
+    setLoading(true);
+    setEditionConfirmed(false);
+    setEditionDialogOpen(false);
+    setMessage('');
+    setImportError('');
+    try {
+      const param = searchMode === 'barcode'
+        ? `barcode=${encodeURIComponent(value)}`
+        : `catno=${encodeURIComponent(value)}`;
+      const response = await privateApiFetch(`/api/discogs-search-by-catalog?${param}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || 'No se pudo buscar en Discogs.');
+
+      applyDiscogsData(data, value);
+      setEditionCandidates(Array.isArray(data.candidates) ? data.candidates : []);
+      setEditionConfirmed(false);
+      setEditionDialogOpen(true);
+      setEditionLabel('');
+      setEditionFormat('');
+      setEditionReleaseId('');
+      setEditionError('');
     } catch (error: any) {
       console.error('Discogs import error:', error);
       setImportError(error.message || 'No se pudo obtener información desde Discogs.');
@@ -3049,23 +3111,27 @@ function DiscogsImportPage() {
   };
 
   const findExistingAlbumId = async () => {
-    const albumsRef = collection(db, 'albums');
-    const snapshot = await getDocs(albumsRef);
-    const clean = (value?: string) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const currentCat = clean(catalogNumber || editionCatalogNumber || originalCatalogNumber);
-    const currentTitle = clean(title);
-    const currentArtist = clean(artistName);
-
+    const snapshot = await getDocs(collection(db, 'albums'));
+    const normalized = (value?: string) => String(value || '').trim().toLocaleLowerCase();
+    const candidateCat = normalized(catalogNumber);
     for (const albumDoc of snapshot.docs) {
-      const a = albumDoc.data() as Album;
-      const albumCats = [a.catalogNumber, a.editionCatalogNumber, a.originalCatalogNumber].map(clean).filter(Boolean);
-      if (currentCat && albumCats.includes(currentCat)) return albumDoc.id;
-      if (currentTitle && clean(a.title) === currentTitle && clean(a.artistName) === currentArtist) return albumDoc.id;
+      const existing = albumDoc.data() as Album & { discogsReleaseId?: number };
+      if (existing.discogsReleaseId && existing.discogsReleaseId === Number(editionReleaseId)) return albumDoc.id;
+      const sameEdition = normalized(existing.title) === normalized(title) &&
+        normalized(existing.catalogNumber) === candidateCat &&
+        normalized(existing.label) === normalized(label) &&
+        existing.formats?.includes(formats[0]);
+      if (sameEdition) return albumDoc.id;
     }
     return null;
   };
 
   const saveApprovedImport = async () => {
+    if (!editionConfirmed) {
+      setImportError('Confirma primero el sello y el formato de tu ejemplar.');
+      setEditionDialogOpen(true);
+      return;
+    }
     setImportError('');
     const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
@@ -3117,9 +3183,16 @@ function DiscogsImportPage() {
         resolvedArtistIds.push(artistId);
       }
 
-      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber);
+      // Discogs ID distinguishes CD and vinyl releases sharing a catalog number.
+      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
       const albumRef = doc(db, 'albums', albumId);
+      const existingExactId = await getDoc(albumRef);
+      if (existingExactId.exists()) {
+        setImportError('Esta edición ya existe. No se ha sobrescrito ningún álbum.');
+        return;
+      }
       await setDoc(albumRef, {
+        discogsReleaseId: Number(editionReleaseId),
         artistId: mainArtistId,
         artistName: mainArtistName,
         allArtistIds: Array.from(new Set(resolvedArtistIds)),
@@ -3199,6 +3272,80 @@ function DiscogsImportPage() {
         {discogsUrl && <a href={discogsUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-sm underline text-ink/60 hover:text-gold">Ver release en Discogs</a>}
       </div>
 
+      {editionDialogOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-ink/70 p-3 sm:p-6">
+          <div role="dialog" aria-modal="true" aria-labelledby="edition-dialog-heading"
+            className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-3xl bg-paper p-5 sm:p-8 shadow-2xl space-y-5">
+            <div className="space-y-2">
+              <span className="text-xs uppercase tracking-widest font-bold text-gold">Confirmar tu ejemplar</span>
+              <h2 id="edition-dialog-heading" className="font-serif text-3xl">¿Qué edición tienes en casa?</h2>
+              <p className="text-sm text-ink/60">
+                Elige el sello discográfico y si tu copia es CD o vinilo. Se cargarán los datos de esa edición exacta de Discogs.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="edition-label" className="text-sm font-semibold">Sello discográfico de tu ejemplar</label>
+              <select id="edition-label" autoFocus value={editionLabel}
+                onChange={e => { setEditionLabel(e.target.value); setEditionReleaseId(''); setEditionError(''); }}
+                className="w-full rounded-xl bg-ink/5 px-4 py-3">
+                <option value="">Selecciona un sello...</option>
+                {Array.from(new Set(editionCandidates.flatMap(candidate => candidate.labels))).sort().map(item =>
+                  <option key={item} value={item}>{item}</option>)}
+              </select>
+            </div>
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-semibold">Formato de tu ejemplar</legend>
+              <div className="grid grid-cols-2 gap-3">
+                {(['CD', 'Vinilo'] as const).map(value => (
+                  <button key={value} type="button" aria-pressed={editionFormat === value}
+                    onClick={() => { setEditionFormat(value); setEditionReleaseId(''); setEditionError(''); }}
+                    className={cn('rounded-xl border px-4 py-4 font-medium',
+                      editionFormat === value ? 'border-gold bg-gold/10' : 'border-ink/15')}>
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            {editionLabel && editionFormat && (
+              <div className="space-y-2">
+                <label htmlFor="edition-release" className="text-sm font-semibold">Edición que corresponde a tu copia</label>
+                {matchingCandidates.length ? (
+                  <select id="edition-release"
+                    value={editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '')}
+                    onChange={e => { setEditionReleaseId(e.target.value); setEditionError(''); }}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3 text-sm">
+                    <option value="">Seleccionar edición...</option>
+                    {matchingCandidates.map(candidate => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.title} · {candidate.year || 's/f'} · {candidate.catno || 's/n'} · Discogs #{candidate.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p role="alert" className="text-sm text-amber-700">
+                    No aparece una edición que coincida. Busca por el código de barras o un número de catálogo más específico. No se copiarán datos de otra edición.
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-ink/50">
+              El sello original es un dato distinto. Sólo se completará si hay una fuente fiable; también puedes ingresarlo manualmente.
+            </p>
+            {editionError && <p role="alert" className="text-sm text-red-700">{editionError}</p>}
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
+              <button type="button" disabled={editionLoading} onClick={() => setEditionDialogOpen(false)}
+                className="rounded-full border border-ink/15 px-5 py-3 text-sm">Volver sin confirmar</button>
+              <button type="button" disabled={editionLoading || !editionLabel || !editionFormat || !matchingCandidates.length ||
+                (matchingCandidates.length > 1 && !editionReleaseId)}
+                onClick={confirmEdition}
+                className="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">
+                {editionLoading ? 'Cargando edición...' : 'Confirmar y completar datos'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {title && (
         <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
@@ -3274,16 +3421,16 @@ function DiscogsImportPage() {
                 <Field label="Número de catálogo" value={catalogNumber} setValue={setCatalogNumber}/>
                 <div className="space-y-2 sm:col-span-2">
                   <label htmlFor="import-sello" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">
-                    Sello discográfico {discogsLabelOptions.length > 1 ? '· Elige el de tu copia' : ''}
+                    Sello discográfico de tu ejemplar (no el original)
                   </label>
                   {discogsLabelOptions.length > 1 ? (
                     <select id="import-sello" value={label}
-                      onChange={e => { setLabel(e.target.value); setOriginalLabel(e.target.value); }}
+                      onChange={e => { setLabel(e.target.value); }}
                       className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
                       <option value="">Seleccionar sello...</option>
                       {discogsLabelOptions.map(item => <option key={item} value={item}>{item}</option>)}
                     </select>
-                  ) : <input id="import-sello" value={label} onChange={e => { setLabel(e.target.value); setOriginalLabel(e.target.value); }}
+                  ) : <input id="import-sello" value={label} onChange={e => { setLabel(e.target.value); }}
                       className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3" />}
                 </div>
                 <div className="space-y-2">
@@ -3310,10 +3457,16 @@ function DiscogsImportPage() {
                   <Field label="País" value={country} setValue={setCountry}/>
                   <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber}/>
                   <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber}/>
-                  <Field label="Sello original" value={originalLabel} setValue={setOriginalLabel}/>
+                  <Field label="Sello original (si se conoce)" value={originalLabel} setValue={setOriginalLabel}/>
                   <Field label="Año original" value={originalYear} setValue={setOriginalYear}/>
                   <Field label="Fecha edición" value={editionDate} setValue={setEditionDate}/>
-                  <Field label="Formatos (separados por coma)" value={formatList} setValue={setFormatList}/>
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Formato de tu ejemplar</label>
+                    <div className="flex gap-2">
+                      <span className="flex-1 rounded-xl bg-ink/5 px-4 py-3 text-sm">{formatList || 'Sin seleccionar'}</span>
+                      <button type="button" onClick={() => setEditionDialogOpen(true)} className="rounded-xl border border-ink/15 px-3 py-2 text-xs">Cambiar edición</button>
+                    </div>
+                  </div>
                   <Field label="Cantidad de discos" value={String(discCount)} setValue={v => setDiscCount(Math.max(1, Number(v) || 1))}/>
                   <Field label="Orquesta" value={orchestra} setValue={setOrchestra}/>
                   <Field label="Director" value={conductor} setValue={setConductor}/>
