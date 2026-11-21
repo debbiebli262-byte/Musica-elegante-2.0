@@ -1644,7 +1644,7 @@ function SearchPage() {
   const normalizeSearch = (value: unknown) => String(value || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase().trim();
   const normalizedQuery = normalizeSearch(searchText);
-  const availableLabels = Array.from(new Set(albums.flatMap(album =>
+  const availableLabels = Array.from(new Set<string>(albums.flatMap(album =>
     normalizeRecordLabels(album.label).split(',').map(value => value.trim()).filter(Boolean))))
     .sort((a, b) => a.localeCompare(b));
   const availableFormats = Array.from(new Set(albums.flatMap(album => album.formats || []))).sort();
