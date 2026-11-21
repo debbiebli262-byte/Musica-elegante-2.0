@@ -13,6 +13,7 @@ import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { getCatalogRecordType, type CatalogRecordType } from './utils/catalogRecordType';
+import { proposeVerifiedTracklists, isVerifiedTracklistStillApplicable, type VerifiedTracklistProposal } from './utils/verifiedTracklists';
 import { proposeArtistRepairs, isRepairStillApplicable, type ArtistRepair } from './utils/artistRepairs';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
@@ -313,6 +314,7 @@ function CatalogMaintenance() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [backupDownloaded, setBackupDownloaded] = useState(false);
   const [artistRepairs, setArtistRepairs] = useState<ArtistRepair[] | null>(null);
+  const [tracklistProposals, setTracklistProposals] = useState<VerifiedTracklistProposal[] | null>(null);
 
   const loadCatalog = async () => {
     const [artistDocs, albumDocs, collectionDocs, jobDocs] = await Promise.all([
@@ -459,6 +461,51 @@ function CatalogMaintenance() {
     setMessage(`Correcciones guardadas: ${updated}. Omitidas por datos cambiados: ${skipped}. Errores: ${failed}. Revisa el catálogo otra vez.`);
   };
 
+  const previewTracklistEnrichment = async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      const snapshot = await getDocs(collection(db, 'albums'));
+      const albums = snapshot.docs.map(item => ({ ...item.data(), id: item.id } as Album));
+      const candidates = proposeVerifiedTracklists(albums);
+      setTracklistProposals(candidates);
+      setMessage(candidates.length
+        ? `Se encontró ${candidates.length} edición con lista de pistas verificada. Revisa la fuente antes de guardarla.`
+        : 'No quedan ediciones verificadas con pistas pendientes de completar.');
+    } catch (error) {
+      console.error('Tracklist preview unavailable', error);
+      setMessage('No se pudieron consultar los álbumes. No se modificó nada.');
+    } finally { setRunning(false); }
+  };
+
+  const applyVerifiedTracklists = async () => {
+    if (running || !backupDownloaded || !tracklistProposals?.length) return;
+    if (!window.confirm('¿Añadir pistas documentadas a las ediciones verificadas? No se eliminará ni reemplazará ninguna pista existente.')) return;
+    setRunning(true);
+    let updated = 0, skipped = 0, failed = 0;
+    for (const proposal of tracklistProposals) {
+      try {
+        const applied = await runTransaction(db, async transaction => {
+          const ref = doc(db, 'albums', proposal.albumId);
+          const snapshot = await transaction.get(ref);
+          if (!snapshot.exists() || !isVerifiedTracklistStillApplicable({ id: snapshot.id, ...snapshot.data() } as Album, proposal)) return false;
+          // An untouched release with no documented works is the only allowed target.
+          transaction.update(ref, { discs: [proposal.disc] });
+          return true;
+        });
+        if (applied) updated++; else skipped++;
+      } catch (error) {
+        failed++;
+        console.error('Verified tracklist was not applied:', proposal.albumId, error);
+      }
+    }
+    setTracklistProposals(null);
+    setReport(null);
+    setPreviewOpen(false);
+    setMessage(`Listas de pistas completas: ${updated}. Omitidas: ${skipped}. Errores: ${failed}. Vuelve a ejecutar Revisar catálogo.`);
+    setRunning(false);
+  };
+
   const fixRepeatedLabels = async () => {
     if (!backupDownloaded || running) return;
     if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
@@ -502,6 +549,10 @@ function CatalogMaintenance() {
             <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
             <button type="button" onClick={previewArtistRepairs} disabled={running}
               className="rounded-full border border-gold/50 text-ink px-4 py-3 text-sm disabled:opacity-50">Reparar enlaces de artistas</button>
+            <button type="button" onClick={previewTracklistEnrichment} disabled={running}
+              className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">
+              Completar pistas verificadas
+            </button>
             <button type="button" onClick={fixRepeatedLabels} disabled={running || !backupDownloaded}
               title={backupDownloaded ? 'Corregir sellos repetidos' : 'Descarga primero una copia de seguridad'}
               className="rounded-full border border-gold/50 text-gold px-4 py-3 text-sm disabled:opacity-40">
@@ -511,6 +562,30 @@ function CatalogMaintenance() {
         </div>
         <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
         {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
+        {tracklistProposals !== null && (
+          <div className="border-t border-ink/10 pt-3 space-y-3">
+            <h3 className="font-serif text-xl">Pistas verificadas ({tracklistProposals.length})</h3>
+            <p className="text-sm text-ink/60">Solo se completan ediciones exactas identificadas por título y número de catálogo. Si ya se añadieron pistas, la operación se omite y conserva todo lo existente.</p>
+            {tracklistProposals.map(proposal => (
+              <div key={proposal.albumId} className="border border-ink/10 rounded-xl p-4 space-y-2">
+                <p className="font-bold">{proposal.title} · {proposal.catalogNumber}</p>
+                <p className="text-sm text-ink/60">{proposal.disc.works.length} pistas con compositor y duración</p>
+                <a href={proposal.source} target="_blank" rel="noopener noreferrer" className="text-sm underline text-gold">Consultar la edición original (MusicBrainz)</a>
+                <ol className="list-decimal ml-5 max-h-40 overflow-y-auto text-xs text-ink/60 space-y-1">
+                  {proposal.disc.works.map((work, index) => <li key={index}>{work.title} — {work.composer} ({work.movements[0]?.duration})</li>)}
+                </ol>
+              </div>
+            ))}
+            {!tracklistProposals.length && <p className="text-sm text-ink/60">No quedan propuestas verificadas.</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={applyVerifiedTracklists}
+                disabled={running || !backupDownloaded || tracklistProposals.length === 0}
+                className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-40">Guardar pistas verificadas</button>
+              <button type="button" onClick={() => setTracklistProposals(null)} className="rounded-full border border-ink/20 px-4 py-3 text-sm">Cancelar</button>
+            </div>
+            {!backupDownloaded && <p className="text-xs text-ink/60">Descarga una copia JSON nueva para habilitar el guardado.</p>}
+          </div>
+        )}
         {artistRepairs !== null && (
           <div className="border-t border-ink/10 pt-4 space-y-3">
             <h3 className="font-serif text-xl">Vista previa: correcciones de artistas ({artistRepairs.length})</h3>
