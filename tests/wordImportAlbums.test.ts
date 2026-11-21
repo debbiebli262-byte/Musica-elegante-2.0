@@ -37,3 +37,18 @@ test('existing biography is protected until replacement is confirmed', () => {
   assert.equal(mayReplaceBiography('', 'New biography', false), true);
   assert.equal(mayReplaceBiography('Existing biography', '', true), false);
 });
+
+test('incomplete recording credits enrich a catalog match instead of making another album', () => {
+  const result = wordAlbumCandidates(
+    [{title:'Record A',catalogNumber:'1001',format:'CD'}],
+    [{albumTitle:'Record A',catalogNumber:'1001',label:'Decca',workTitle:'Quartet'}]
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].label, 'Decca');
+});
+
+test('recordings from another label or format are not attached to this release', () => {
+  const album = wordAlbumCandidates([{title:'Record A', catalogNumber:'1001',label:'Decca',format:'CD'}],[])[0];
+  assert.equal(sameWordEdition(album,{albumTitle:'Record A',catalogNumber:'1001',label:'RCA',format:'CD'}),false);
+  assert.equal(sameWordEdition(album,{albumTitle:'Record A',catalogNumber:'1001',label:'Decca',format:'Vinilo'}),false);
+});
