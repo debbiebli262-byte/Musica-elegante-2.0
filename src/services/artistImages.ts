@@ -1,3 +1,4 @@
+import { privateApiFetch } from './privateApi';
 import { useEffect, useState } from 'react';
 
 const cache = new Map<string, Promise<string>>();
@@ -8,7 +9,7 @@ export function findArtistPortrait(name: string): Promise<string> {
   const existing = cache.get(normalizedName);
   if (existing) return existing;
 
-  const pending = fetch('/api/artist-image?name=' + encodeURIComponent(name.trim()))
+  const pending = privateApiFetch('/api/artist-image?name=' + encodeURIComponent(name.trim()))
     .then(async response => {
       if (!response.ok) throw new Error('Artist image lookup failed');
       const data: unknown = await response.json();
