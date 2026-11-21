@@ -1,3 +1,4 @@
+import { requireLibraryMember } from './_auth';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 type WikiPage = {
@@ -14,6 +15,7 @@ const musicalTerms = /musician|composer|pianist|violinist|conductor|singer|jazz|
 const qualifiers = /\((?:musician|composer|pianist|singer|conductor|jazz|violinist|trumpeter|saxophonist|artist|music)\)/i;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (!(await requireLibraryMember(req, res))) return;
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -21,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
   if (!name || name.length > 160) return res.status(400).json({ error: 'Invalid artist name' });
 
-  res.setHeader('Cache-Control', 'public, s-maxage=86400, stale-while-revalidate=604800');
+  res.setHeader('Cache-Control', 'private, no-store');
   try {
     const url = new URL('https://en.wikipedia.org/w/api.php');
     url.searchParams.set('action', 'query');
