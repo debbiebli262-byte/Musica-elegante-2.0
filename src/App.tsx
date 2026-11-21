@@ -3695,6 +3695,9 @@ try {
 
 function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album: Album, onClose: () => void, onEdit: () => void, highlightArtistId?: string }) {
   const [artistName, setArtistName] = useState<string>(album.artistName || '');
+  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0);
+  const classicalMovementCount = (album.discs || []).reduce((total, disc) =>
+    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0);
 
   useEffect(() => {
     if (!artistName) {
@@ -3721,11 +3724,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row"
+        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row min-w-0" role="dialog" aria-modal="true" aria-label={`Detalles del álbum: ${album.title}`
       >
         <button type="button" onClick={onClose} aria-label="Cerrar detalles del álbum" className="md:hidden sticky top-3 self-end mr-3 -mb-12 z-30 w-11 h-11 flex items-center justify-center bg-paper/95 rounded-full shadow-md text-ink"><X size={22} /></button>
         {/* Left Side: Cover & Basic Info */}
-        <div className="w-full md:w-2/5 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
+        <div className="w-full md:w-2/5 min-w-0 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
           <div className="w-40 sm:w-full max-w-full aspect-square rounded-2xl overflow-hidden shadow-lg sm:shadow-2xl bg-ink/10 mx-auto">
             {album.imageUrl ? (
               <img src={album.imageUrl} alt={album.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -3742,7 +3745,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               <p className="text-gold font-bold uppercase tracking-widest text-sm">{artistName}</p>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 pt-4">
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-4 pt-4">
               {album.releaseYear && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Lanzamiento</span>
@@ -3767,7 +3770,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.originalLabel && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original</span>
-                  <p className="text-sm font-medium">{normalizeRecordLabels(album.originalLabel)}</p>
+                  <p className="text-sm font-medium break-words">{normalizeRecordLabels(album.originalLabel)}</p>
                 </div>
               )}
               {album.originalYear && (
@@ -3779,7 +3782,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.label && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello</span>
-                  <p className="text-sm font-medium">{normalizeRecordLabels(album.label)}</p>
+                  <p className="text-sm font-medium break-words">{normalizeRecordLabels(album.label)}</p>
                 </div>
               )}
               {album.catalogNumber && (
@@ -3944,6 +3947,26 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
             </div>
           )}
 
+          {album.genre === 'classical' && classicalWorkCount > 0 && (
+            <div className="rounded-2xl border border-gold/20 bg-gold/5 p-4 space-y-2">
+              <h3 className="font-serif text-lg">Índice de la grabación</h3>
+              <div className="flex flex-wrap gap-2 text-xs font-semibold text-ink/60">
+                <span className="rounded-full bg-white px-3 py-1">{(album.discs || []).length} discos</span>
+                <span className="rounded-full bg-white px-3 py-1">{classicalWorkCount} obras</span>
+                <span className="rounded-full bg-white px-3 py-1">{classicalMovementCount} movimientos</span>
+              </div>
+              <div className="space-y-1">
+                {(album.discs || []).flatMap((disc, discIndex) =>
+                  (disc.works || []).map((work, workIndex) => (
+                    <a key={discIndex + '-' + workIndex} href={'#work-' + discIndex + '-' + workIndex}
+                       className="block rounded-lg px-2 py-2 text-sm hover:bg-white focus-visible:outline focus-visible:outline-gold">
+                      <span className="text-gold font-bold">Disco {disc.discNumber} · </span>{work.title}
+                    </a>
+                  )))}
+              </div>
+            </div>
+          )}
+
           {/* Tracks / Works Hierarchy */}
           {((album.tracks && album.tracks.length > 0) || (album.discs && album.discs.length > 0)) && (
             <div className="space-y-6">
@@ -3964,11 +3987,11 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                           Disco {disc.discNumber}{disc.title ? `: ${disc.title}` : ''}
                         </span>
                       </div>
-                      <div className="space-y-6 pl-4">
+                      <div className="space-y-6 pl-1 sm:pl-4">
                         {disc.works.map((work, wIdx) => {
                         const isHighlighted = highlightArtistId && Array.isArray((work as any).trackArtists) && (work as any).trackArtists.includes(highlightArtistId);
                         return (
-                          <div key={wIdx} className={cn("space-y-3 rounded-xl p-3 -mx-3 transition-colors", isHighlighted ? "bg-gold/10 border border-gold/30" : "")}>
+                          <div key={wIdx} id={'work-' + dIdx + '-' + wIdx} className={cn("space-y-3 rounded-xl p-3 -mx-3 transition-colors scroll-mt-20", isHighlighted ? "bg-gold/10 border border-gold/30" : "")}>
                             <div className="flex flex-col">
                               <span className={cn("text-sm font-bold", isHighlighted ? "text-gold" : "text-ink/90")}>{work.title}{isHighlighted && <span className="ml-2 text-[10px] uppercase tracking-widest font-bold text-gold/70">★ Grabación destacada</span>}</span>
                               {(work.orchestra || work.conductor || work.soloists?.length || work.foundationDate || work.foundationPlace || work.founderName || work.choirMaster) && (
@@ -4029,10 +4052,10 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                             <div className="space-y-1">
                               {work.movements.map((mov, mIdx) => (
                                 <React.Fragment key={mIdx}>
-                                  <div className="flex items-center gap-4 p-2 hover:bg-ink/5 rounded-lg transition-colors group">
+                                  <div className="flex items-start sm:items-center gap-2 sm:gap-4 p-2 hover:bg-ink/5 rounded-lg transition-colors group min-w-0">
                                     <span className="w-6 text-center text-[10px] font-bold text-ink/20 group-hover:text-gold">{mov.trackNumber}</span>
                                     {mov.side && <span className="text-[10px] font-bold text-gold/60 w-4">{mov.side}</span>}
-                                    <span className="flex-grow text-xs text-ink/70">{mov.title}</span>
+                                    <span className="flex-1 min-w-0 text-xs text-ink/70 break-words">{mov.title}</span>
                                     {mov.duration && <span className="text-[10px] text-ink/30 font-mono">{mov.duration}</span>}
                                   </div>
                                   {(mov.orchestra || mov.conductor || mov.soloists?.length || mov.foundationDate || mov.foundationPlace || mov.founderName || mov.choirMaster || mov.compositionDate || mov.compositionPlace) && (
