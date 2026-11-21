@@ -63,6 +63,12 @@ export default async function handler(
 
   try {
     const { buffer, fileName } = await parseFormData(req);
+    if (!fileName.toLowerCase().endsWith('.docx')) {
+      return res.status(400).json({ error: 'Sube un archivo .docx válido.' });
+    }
+    if (buffer.length > 8 * 1024 * 1024) {
+      return res.status(413).json({ error: 'El archivo supera el límite de 8 MB.' });
+    }
 
     // Extract text from docx
     let rawText: string;
@@ -86,20 +92,33 @@ export default async function handler(
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `Analiza el siguiente texto extraído de un archivo Word de música clásica y extrae la información estructurada.
+    const prompt = `Analiza el siguiente texto extraído de un archivo Word sobre un artista de música clásica o jazz y su discografía. Extrae todos los datos documentados, sin añadir información inventada.
 
 Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin explicaciones) con esta estructura exacta:
 
 {
   "composer": {
-    "name": "nombre del compositor",
+    "name": "nombre del artista o compositor",
     "birthDate": "fecha en formato YYYY-MM-DD o texto libre si no hay formato claro",
     "birthPlace": "lugar de nacimiento",
     "deathDate": "fecha en formato YYYY-MM-DD o texto libre",
     "deathPlace": "lugar de fallecimiento",
     "nationality": "nacionalidad",
-    "biography": "biografía completa"
+    "biography": "transcripción fiel y completa de la biografía del documento"
   },
+  "albums": [
+    {
+      "title": "título exacto del álbum si aparece",
+      "label": "sello de esta edición",
+      "catalogNumber": "número de catálogo de esta edición",
+      "barcode": "código de barras si está presente",
+      "format": "CD, Vinilo, etc., solo si figura",
+      "editionYear": "año de esta edición",
+      "country": "país si figura",
+      "discCount": 1,
+      "notes": ""
+    }
+  ],
   "recordings": [
     {
       "section": "sección o categoría",
@@ -119,6 +138,7 @@ Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin ex
       "albumSubtitle": "subtítulo del álbum",
       "label": "sello discográfico",
       "catalogNumber": "número de catálogo",
+      "barcode": "código de barras",
       "format": "formato (CD, Vinilo, etc.)",
       "editionYear": "año de edición",
       "country": "país",
@@ -130,13 +150,20 @@ Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin ex
 
 Si algún campo no existe en el texto, déjalo como cadena vacía "" o array vacío [].
 No inventes información que no esté en el texto.
+Identifica TODOS los álbumes y sus catálogos/códigos de barras, incluso si hay más de uno.
+Conserva la biografía íntegra de la persona en composer.biography: no la resumas, reescribas ni sustituyas por una biografía generada.
+Separa los lanzamientos por número de catálogo, código de barras, sello y formato.
+No conviertas obras o pistas en álbumes si el documento no indica una edición discográfica.
+No atribuyas información de un álbum a otro.
+Si hay datos inciertos, añádelos a warnings. Nunca inventes números de catálogo, fechas ni biografías.
 
 TEXTO A ANALIZAR:
-${rawText.slice(0, 15000)}`;
+${rawText.slice(0, 80000)}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
+      config: { responseMimeType: 'application/json' },
     });
 
     const responseText = response.text || "";
@@ -163,6 +190,12 @@ ${rawText.slice(0, 15000)}`;
       }
     }
 
+    if (!parsed || typeof parsed !== 'object' || !parsed.composer || !Array.isArray(parsed.recordings)) {
+      return res.status(502).json({ error: 'La IA devolvió una estructura incompleta. No se guardó ningún dato.' });
+    }
+    parsed.albums = Array.isArray(parsed.albums) ? parsed.albums : [];
+    parsed.warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+    if (rawText.length > 80000) parsed.warnings.push('El documento excede 80.000 caracteres: revisa que todos los álbumes hayan sido extraídos.');
     parsed.sourceFileName = fileName;
     return res.status(200).json(parsed);
   } catch (error: any) {

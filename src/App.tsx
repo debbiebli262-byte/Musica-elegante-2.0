@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { wordAlbumCandidates, sameWordEdition, mayReplaceBiography, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
@@ -86,6 +87,7 @@ interface ServerRecording {
   albumSubtitle?: string;
   label?: string;
   catalogNumber?: string;
+  barcode?: string;
   format?: string;
   editionYear?: string;
   country?: string;
@@ -106,7 +108,7 @@ interface ParsedWordImport {
   rawText?: string;
   // Legacy client-side fields
   artist?: Partial<Artist>;
-  albums?: Partial<Album>[];
+  albums?: WordAlbumCandidate[];
   notes?: string[];
   // Actual server response fields
   composer?: ServerComposer;
@@ -2243,6 +2245,17 @@ function ImportWordPage() {
   const [message, setMessage] = useState<string>('');
   const [copied, setCopied] = useState(false);
   const [importGenreSelection, setImportGenreSelection] = useState<Genre>('classical');
+  const [discogsMatches, setDiscogsMatches] = useState<Record<string, Array<{id:number;title:string;year:string;catno:string;labels:string[];formats:string[]}>>>({});
+  const [discogsSelection, setDiscogsSelection] = useState<Record<string,string>>({});
+  const [enrichedWordAlbums, setEnrichedWordAlbums] = useState<Record<string, WordAlbumCandidate & {
+    imageUrl?: string; discogsReleaseId?: number; discs?: Disc[]; tracks?: Track[];
+    producer?: string; engineer?: string; conductor?: string; orchestra?: string;
+  }>>({});
+  const [enrichingAlbum, setEnrichingAlbum] = useState('');
+  const [enrichMessage, setEnrichMessage] = useState('');
+  const [batchSearching, setBatchSearching] = useState(false);
+  const extractedCandidates = wordAlbumCandidates(parsedData?.albums || [], parsedData?.recordings || []);
+  const albumsForImport = extractedCandidates.map(item => enrichedWordAlbums[normalizedEditionKey(item)] || item);
 
   useEffect(() => {
     const importsQuery = query(collection(db, 'import_jobs'));
@@ -2261,6 +2274,10 @@ function ImportWordPage() {
     setSelectedFile(file);
     setParsedData(null);
     setMessage('');
+    setDiscogsMatches({});
+    setDiscogsSelection({});
+    setEnrichedWordAlbums({});
+    setEnrichMessage('');
   };
 
   const handleProcessFile = async () => {
@@ -2280,6 +2297,94 @@ function ImportWordPage() {
       setMessage(error instanceof Error ? error.message : 'No se pudo procesar el archivo.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const lookupWordAlbum = async (album: WordAlbumCandidate) => {
+    const key = normalizedEditionKey(album);
+    const identifier = album.barcode || album.catalogNumber;
+    if (!identifier) {
+      setEnrichMessage('El álbum necesita un código de barras o número de catálogo para buscar en Discogs.');
+      return;
+    }
+    setEnrichingAlbum(key);
+    setEnrichMessage('');
+    try {
+      const param = album.barcode ? 'barcode' : 'catno';
+      const response = await privateApiFetch('/api/discogs-search-by-catalog?' + param + '=' + encodeURIComponent(identifier));
+      const result = await response.json();
+      if (!response.ok) throw new Error(result?.error || 'No se encontró en Discogs.');
+      const candidates = (Array.isArray(result.candidates) ? result.candidates : []).filter((item: {labels:string[];formats:string[]}) => {
+        const labelMatch = !album.label || item.labels.some(label => label.toLowerCase() === album.label.toLowerCase());
+        const documentFormat = album.format.toLowerCase();
+        const formatMatch = !documentFormat || item.formats.some(format =>
+          format.toLowerCase().includes(documentFormat) || documentFormat.includes(format.toLowerCase()));
+        return labelMatch && formatMatch;
+      });
+      setDiscogsMatches(current => ({...current, [key]: candidates}));
+      setEnrichMessage(candidates.length ? 'Elige la edición exacta antes de completar sus datos.' :
+        'No se encontraron ediciones compatibles con el sello/formato del documento. Conservamos los datos originales.');
+    } catch (error) {
+      setEnrichMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEnrichingAlbum('');
+    }
+  };
+
+  const searchAllWordAlbums = async () => {
+    const searchables = extractedCandidates.filter(album => album.barcode || album.catalogNumber);
+    if (!searchables.length) {
+      setEnrichMessage('No hay números de catálogo ni códigos de barras para buscar.');
+      return;
+    }
+    setBatchSearching(true);
+    setEnrichMessage(`Buscando ${searchables.length} ediciones en Discogs. Los resultados requieren revisión.`);
+    try {
+      // Sequential requests avoid sending a burst to Discogs from a single import.
+      for (let index = 0; index < searchables.length; index++) {
+        await lookupWordAlbum(searchables[index]);
+        setEnrichMessage(`Búsquedas completadas: ${index + 1}/${searchables.length}. Elige las ediciones correctas antes de guardar.`);
+      }
+    } finally {
+      setBatchSearching(false);
+    }
+  };
+
+  const confirmWordDiscogsRelease = async (album: WordAlbumCandidate) => {
+    const key = normalizedEditionKey(album);
+    const releaseId = discogsSelection[key];
+    if (!releaseId || !discogsMatches[key]?.some(item => String(item.id) === releaseId)) return;
+    setEnrichingAlbum(key);
+    setEnrichMessage('');
+    try {
+      const response = await privateApiFetch('/api/discogs-search-by-catalog?releaseId=' + encodeURIComponent(releaseId));
+      const found = await response.json();
+      if (!response.ok) throw new Error(found?.error || 'No se pudo cargar la edición.');
+      if (album.catalogNumber && found.catno &&
+          album.catalogNumber.replace(/[\s-]/g, '').toLowerCase() !==
+          String(found.catno).replace(/[\s-]/g, '').toLowerCase()) {
+        throw new Error('El número de catálogo no coincide con el documento. Revisa la edición.');
+      }
+      setEnrichedWordAlbums(current => ({...current, [key]: {
+        ...album,
+        title: album.title || found.title || '',
+        label: album.label || String(found.label || '').split(',')[0].trim(),
+        catalogNumber: album.catalogNumber || found.catno || '',
+        editionYear: album.editionYear || String(found.year || ''),
+        country: album.country || found.country || '',
+        discCount: album.discCount || found.discCount || 1,
+        imageUrl: found.coverImage || found.thumb || '',
+        discogsReleaseId: Number(releaseId),
+        discs: Array.isArray(found.discs) ? found.discs : [],
+        tracks: Array.isArray(found.tracks) ? found.tracks : [],
+        producer: found.producer || '', engineer: found.engineer || '',
+        orchestra: found.orchestra || '', conductor: found.conductor || '',
+      }}));
+      setEnrichMessage('Edición verificada en Discogs. Los datos del Word tienen prioridad.');
+    } catch (error) {
+      setEnrichMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setEnrichingAlbum('');
     }
   };
 
@@ -2312,120 +2417,142 @@ function ImportWordPage() {
   };
 
   const handleApproveAndSave = async () => {
-    if (!selectedFile || !parsedData) return;
-    const composerName = parsedData.composer?.name?.trim();
-    if (!composerName) {
-      setMessage('No se encontró el nombre del compositor. Revisa el archivo antes de aprobarlo.');
+    if (!selectedFile || !parsedData || isApproving) return;
+    const person = parsedData.composer;
+    const name = person?.name?.trim();
+    if (!name) {
+      setMessage('No se encontró el nombre del artista. Revisa el documento antes de guardar.');
       return;
     }
+    const albumsToSave = albumsForImport.filter(item => item.title.trim());
+    if (albumsToSave.length < albumsForImport.length) {
+      setMessage('Hay ediciones sin título. Corrige el Word antes de guardar: no se crearán álbumes sin identificar.');
+      return;
+    }
+    if (!window.confirm(`¿Guardar la ficha de ${name} y ${albumsToSave.length} edición(es) revisadas? No se sobrescribirán álbumes existentes.`)) return;
 
     setIsApproving(true);
     setMessage('');
-
+    let savedCount = 0;
+    let skippedCount = 0;
     try {
-      const importGenre: Genre = importGenreSelection;
-      const artistId = slugifyArtistId(composerName);
-      if (!artistId) throw new Error('El nombre del compositor no produce un identificador válido.');
-
-      const composer = parsedData.composer!;
-      await setDoc(doc(db, 'artists', artistId), {
-        name: composerName,
-        genre: importGenre,
-        biography: composer.biography || '',
-        birthDate: composer.birthDate || '',
-        birthPlace: composer.birthPlace || '',
-        deathDate: composer.deathDate || '',
-        deathPlace: composer.deathPlace || '',
-      }, { merge: true });
-
-      const groups = new Map<string, { title: string; recordings: ServerRecording[]; edition: ServerRecording }>();
-      for (const rec of parsedData.recordings || []) {
-        const title = (rec.albumTitle || rec.workTitle || '').trim();
-        if (!title) continue;
-
-        // Different catalog numbers, labels and editions must remain separate releases.
-        const key = [artistId, title, rec.catalogNumber || '', rec.label || '', rec.editionYear || '']
-          .map(value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase())
-          .join('|');
-        const group = groups.get(key);
-        if (group) group.recordings.push(rec);
-        else groups.set(key, { title, recordings: [rec], edition: rec });
+      // Look up existing names; using only a generated slug can create two artist records.
+      const existingByName = await getArtistByName(name);
+      const artistId = (existingByName?.id as string | undefined) || slugifyArtistId(name);
+      if (!artistId) throw new Error('El nombre del artista no permite crear un identificador.');
+      const artistRef = doc(db, 'artists', artistId);
+      const artistSnapshot = await getDoc(artistRef);
+      const existing = artistSnapshot.exists() ? artistSnapshot.data() as Partial<Artist> : null;
+      let allowBiographyReplacement = false;
+      const proposedBiography = String(person?.biography || '').trim();
+      if (proposedBiography && existing?.biography?.trim() &&
+          existing.biography.trim() !== proposedBiography) {
+        allowBiographyReplacement = window.confirm(
+          `La ficha de ${name} ya tiene una biografía. ¿Quieres REEMPLAZARLA con el texto completo del Word? Pulsa Cancelar para conservar la actual.`
+        );
+      }
+      const artistChanges: Record<string, unknown> = {
+        ...(existing ? {} : {name, genre: importGenreSelection}),
+      };
+      if (mayReplaceBiography(existing?.biography, proposedBiography, allowBiographyReplacement)) {
+        artistChanges.biography = proposedBiography;
+      }
+      // Fill missing biographical fields only. Never erase information previously saved.
+      for (const field of ['birthDate', 'deathDate', 'birthPlace', 'deathPlace'] as const) {
+        if (!existing?.[field] && person?.[field]) artistChanges[field] = person[field];
+      }
+      if (Object.keys(artistChanges).length) {
+        await setDoc(artistRef, artistChanges, {merge: true});
       }
 
-      let savedCount = 0;
-      let skippedCount = 0;
-      for (const { title, recordings, edition } of groups.values()) {
-        const albumId = slugifyAlbumId(
-          composerName,
-          title,
-          edition.editionYear || '',
-          [edition.label, edition.catalogNumber].filter(Boolean).join('-')
-        );
-        if (!albumId) continue;
-        if ((await getDoc(doc(db, 'albums', albumId))).exists()) {
-          skippedCount++;
-          continue;
-        }
+      // Existing editions are checked using release identity rather than artist affiliation.
+      const existingAlbumSnapshot = await getDocs(collection(db, 'albums'));
+      const existingAlbums = existingAlbumSnapshot.docs.map(item => item.data() as Album & {
+        discogsReleaseId?: number; barcode?: string;
+      });
+      const norm = (value: unknown) => String(value || '').normalize('NFKC').trim().toLowerCase().replace(/[\s-]+/g, '');
+      const alreadySaved = (candidate: typeof albumsToSave[number]) => existingAlbums.some(album =>
+        ('discogsReleaseId' in candidate && candidate.discogsReleaseId &&
+          album.discogsReleaseId === candidate.discogsReleaseId) ||
+        (norm(candidate.catalogNumber || candidate.barcode) &&
+          [album.catalogNumber, album.barcode].some(value => norm(value) === norm(candidate.catalogNumber || candidate.barcode)) &&
+          norm(album.label) === norm(candidate.label) &&
+          (album.formats || []).some(format => norm(format) === norm(candidate.format)))
+      );
 
+      for (const candidate of albumsToSave) {
+        if (alreadySaved(candidate)) { skippedCount++; continue; }
+        const candidateKey = normalizedEditionKey(candidate);
+        const editionId = slugifyAlbumId(name, candidate.title, candidate.editionYear,
+          [candidate.label, candidate.catalogNumber, candidate.barcode, candidate.format].filter(Boolean).join('-'));
+        if (!editionId) continue;
+        const targetRef = doc(db, 'albums', editionId);
+        if ((await getDoc(targetRef)).exists()) { skippedCount++; continue; }
+
+        const recordings = (parsedData.recordings || []).filter(item => sameWordEdition(candidate, item));
         const works: Work[] = recordings.map((rec, index) => ({
-          title: rec.workTitle?.trim() || title,
+          title: rec.workTitle?.trim() || candidate.title,
           compositionDate: rec.compositionDate || '',
           orchestra: rec.orchestra || '',
           conductor: rec.conductor || '',
-          soloists: (rec.soloists || []).map(name => ({ name, instrument: '' })),
+          soloists: (rec.soloists || []).map(soloist => ({name: soloist, instrument: ''})),
           movements: [{
             trackNumber: index + 1,
-            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || title,
+            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || candidate.title,
             duration: '',
             notes: [rec.opus, rec.premiereDate, rec.notes].filter(Boolean).join(' · '),
-            orchestra: rec.orchestra || '',
-            conductor: rec.conductor || ''
-          }]
+          }],
         }));
-
-        const validFormats = ['CD', 'Vinilo', 'DVD', 'Bluray'] as const;
-        const format = validFormats.find(value => value.toLowerCase() === (edition.format || '').trim().toLowerCase());
-        await setDoc(doc(db, 'albums', albumId), {
-          artistId,
-          artistName: composerName,
-          title,
-          genre: importGenre,
-          releaseYear: edition.editionYear || '',
+        const enriched = enrichedWordAlbums[candidateKey];
+        const formatName = candidate.format.toLowerCase();
+        const selectedFormat = formatName.includes('vinyl') || formatName.includes('vinilo') || formatName.includes('lp') ? 'Vinilo'
+          : formatName.includes('cd') ? 'CD' : formatName.includes('dvd') ? 'DVD' : '';
+        await setDoc(targetRef, {
+          artistId, artistName: name, allArtistIds: [artistId],
+          title: candidate.title.trim(), genre: importGenreSelection,
+          releaseYear: candidate.editionYear || '',
+          label: normalizeRecordLabels(candidate.label), catalogNumber: candidate.catalogNumber || '',
+          barcode: candidate.barcode || '', country: candidate.country || '',
+          formats: selectedFormat ? [selectedFormat] : [],
+          discCount: candidate.discCount || 1,
           recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
-          location: edition.recordingLocation || '',
-          label: normalizeRecordLabels(edition.label || ''),
-          catalogNumber: edition.catalogNumber || '',
-          formats: format ? [format] : [],
-          orchestra: edition.orchestra || '',
-          conductor: edition.conductor || '',
-          country: edition.country || '',
-          musicians: recordings.flatMap(rec => (rec.performers || []).map(name => ({ name, instrument: '' }))),
-          discs: importGenre === 'classical' ? [{ discNumber: 1, works }] : [],
-          tracks: importGenre === 'jazz' ? recordings.map((rec, index) => ({
-            trackNumber: index + 1, title: rec.workTitle || title, duration: ''
-          })) : [],
-          discCount: 1,
-          anecdotes: recordings.map(rec => rec.notes).filter(Boolean).join('\n'),
-          imageUrl: '',
+          location: recordings.find(rec => rec.recordingLocation)?.recordingLocation || '',
+          orchestra: enriched?.orchestra || recordings.find(rec => rec.orchestra)?.orchestra || '',
+          conductor: enriched?.conductor || recordings.find(rec => rec.conductor)?.conductor || '',
+          producer: enriched?.producer || '', engineer: enriched?.engineer || '',
+          musicians: recordings.flatMap(rec => (rec.performers || []).map(person => ({name: person, instrument: ''}))),
+          discs: importGenreSelection === 'classical'
+            ? (enriched?.discs?.length ? enriched.discs : (works.length ? [{discNumber: 1, works}] : []))
+            : [],
+          tracks: importGenreSelection === 'jazz'
+            ? (enriched?.tracks?.length ? enriched.tracks : recordings.map((rec, index) => ({
+                trackNumber: index + 1, title: rec.workTitle || candidate.title, duration: ''
+              })))
+            : [],
+          anecdotes: [candidate.notes, ...recordings.map(rec => rec.notes)].filter(Boolean).join('\n'),
+          imageUrl: enriched?.imageUrl || '',
+          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
         });
         savedCount++;
+        existingAlbums.push({
+          id: editionId, artistId, title: candidate.title, genre: importGenreSelection,
+          label: candidate.label, catalogNumber: candidate.catalogNumber, barcode: candidate.barcode,
+          formats: selectedFormat ? [selectedFormat as 'CD' | 'Vinilo' | 'DVD'] : [],
+          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
+        });
       }
 
       const uploadedFile = await uploadWordFileToStorage(selectedFile);
       await addDoc(collection(db, 'import_jobs'), {
-        fileName: selectedFile.name,
-        createdAt: new Date().toISOString(),
-        approvedAt: new Date().toISOString(),
-        status: 'approved',
-        source: 'word_upload',
-        fileUrl: uploadedFile.downloadURL,
-        storagePath: uploadedFile.storagePath,
+        fileName: selectedFile.name, createdAt: new Date().toISOString(),
+        approvedAt: new Date().toISOString(), status: 'approved',
+        source: 'word_upload', fileUrl: uploadedFile.downloadURL, storagePath: uploadedFile.storagePath,
         extractedData: parsedData,
       });
-      setMessage(`✓ ${savedCount} álbum(es) guardado(s); ${skippedCount} edición(es) ya existían. ${groups.size === 0 ? 'No se encontraron grabaciones válidas.' : ''}`);
+      setMessage(`✓ ${savedCount} álbum(es) nuevos guardados; ${skippedCount} ediciones existentes omitidas. Ficha del artista actualizada sin borrar datos existentes.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'artists/albums/import_jobs');
-      setMessage('No se pudieron guardar todos los datos. Revisa los permisos y vuelve a comprobar los álbumes importados.');
+      setMessage(`Error después de guardar ${savedCount} álbum(es). No repitas el proceso sin revisar el catálogo: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsApproving(false);
     }
@@ -2600,8 +2727,70 @@ function ImportWordPage() {
                   </div>
                 </div>
 
+                <section className="space-y-4">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <h3 className="font-serif text-2xl">Ediciones discográficas encontradas</h3>
+                      <p className="text-xs text-ink/50 mt-1">Se importará cada edición una sola vez. Discogs es opcional y sólo se aplican ediciones que elijas.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs rounded-full bg-gold/10 px-3 py-2 font-semibold text-gold">{albumsForImport.length} álbum(es)</span>
+                      <button type="button" onClick={searchAllWordAlbums} disabled={batchSearching || !extractedCandidates.some(a => a.catalogNumber || a.barcode)}
+                        className="rounded-full bg-ink px-4 py-2 text-xs font-semibold text-paper disabled:opacity-40">
+                        {batchSearching ? 'Buscando en Discogs...' : 'Buscar todos en Discogs'}
+                      </button>
+                    </div>
+                  </div>
+                  {enrichMessage && <p role="status" className="text-xs rounded-lg bg-ink/5 p-3 text-ink/70">{enrichMessage}</p>}
+                  {albumsForImport.map((candidate, index) => {
+                    const source = extractedCandidates[index];
+                    const key = normalizedEditionKey(source);
+                    const matches = discogsMatches[key] || [];
+                    const enriched = enrichedWordAlbums[key];
+                    return (
+                      <div key={key + '-' + index} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-3">
+                        <div className="flex gap-3 items-start">
+                          {enriched?.imageUrl ? <img src={enriched.imageUrl} alt={candidate.title} className="w-20 h-20 rounded-xl object-cover shrink-0" /> : <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center"><DiscIcon size={28} className="text-ink/20" /></div>}
+                          <div className="min-w-0 space-y-1 flex-1">
+                            <h4 className="font-serif text-xl break-words">{candidate.title || 'Título no identificado'}</h4>
+                            <p className="text-xs text-ink/60 break-words">{[candidate.label, candidate.catalogNumber, candidate.barcode && `EAN: ${candidate.barcode}`, candidate.format, candidate.editionYear].filter(Boolean).join(' · ') || 'Edición sin identificadores'}</p>
+                            {enriched?.discogsReleaseId && <p className="text-xs text-gold font-semibold">Discogs #{enriched.discogsReleaseId} · Verificado</p>}
+                          </div>
+                        </div>
+                        {(candidate.barcode || candidate.catalogNumber) && (
+                          <div className="space-y-2">
+                            <button type="button" disabled={Boolean(enrichingAlbum)} onClick={() => lookupWordAlbum(source)}
+                              className="rounded-full border border-ink/20 px-4 py-2 text-xs font-bold hover:bg-ink/5 disabled:opacity-40">
+                              {enrichingAlbum === key ? 'Buscando...' : 'Buscar edición en Discogs'}
+                            </button>
+                            {matches.length > 0 && (
+                              <div className="flex flex-col sm:flex-row gap-2">
+                                <select aria-label={`Seleccionar edición de ${candidate.title}`}
+                                  value={discogsSelection[key] || ''}
+                                  onChange={event => setDiscogsSelection(current => ({...current, [key]: event.target.value}))}
+                                  className="min-w-0 flex-1 rounded-xl bg-ink/5 px-3 py-3 text-sm">
+                                  <option value="">Elegir edición exacta...</option>
+                                  {matches.map(match => (
+                                    <option value={match.id} key={match.id}>
+                                      {match.title} · {match.year || 's/f'} · {match.catno} · {match.formats.join('/')} · #{match.id}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button type="button" disabled={Boolean(enrichingAlbum) || !discogsSelection[key]}
+                                  onClick={() => confirmWordDiscogsRelease(source)}
+                                  className="rounded-xl bg-ink text-paper px-4 py-3 text-xs font-semibold disabled:opacity-40">Aplicar edición</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!albumsForImport.length && <p className="text-sm text-ink/50 rounded-xl border border-dashed border-ink/20 p-4">No se detectaron ediciones discográficas. Puedes guardar la biografía; no se inventarán álbumes a partir de obras aisladas.</p>}
+                </section>
+
                 <div className="space-y-3">
-                  <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Álbumes / grabaciones</h3>
+                  <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Grabaciones y obras extraídas del documento</h3>
                   {(extractedAlbums as ServerRecording[]).length > 0 ? (
                     <div className="space-y-4">
                       {extractedAlbums.map((rec, index) => (
