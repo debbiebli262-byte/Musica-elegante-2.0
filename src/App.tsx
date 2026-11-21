@@ -1327,11 +1327,13 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
 }
 
 function CollectionButton({ albumId, status, currentStatus }: { albumId: string, status: 'owned' | 'wishlist', currentStatus: string | null }) {
+  const { isAdmin } = useAuth();
   const isActive = currentStatus === status;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!isAdmin) return;
     
     try {
       const collectionRef = collection(db, 'collection');
@@ -1362,6 +1364,8 @@ function CollectionButton({ albumId, status, currentStatus }: { albumId: string,
   return (
     <button 
       onClick={handleClick}
+      disabled={!isAdmin}
+      aria-label={!isAdmin ? 'Solo el administrador puede modificar la colección' : undefined}
       className={cn(
         "w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-sm",
         isActive ? "bg-gold text-white" : "bg-paper/90 backdrop-blur-sm text-ink hover:text-gold"
@@ -5986,7 +5990,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  const isAdmin = user?.email === "debbiebli262@gmail.com";
+  const isAdmin = user?.email === "debbiebli262@gmail.com" && user.emailVerified;
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
