@@ -1,5 +1,6 @@
 import type { Album, Artist, CollectionItem } from '../types';
 import { normalizeRecordLabels } from './recordLabels';
+import { getCatalogRecordType } from './catalogRecordType';
 
 const key = (value: unknown) => String(value || '')
   .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
@@ -29,7 +30,7 @@ export function inspectCatalog(albums: Album[], artists: Artist[]): CatalogIssue
         issues.push({ kind: 'repeated-label', albumId: album.id, title, detail: field === 'label' ? 'Sello repetido' : 'Sello original repetido' });
       }
     }
-    if (album.genre === 'classical' && !(album.discs || []).some(disc =>
+    if (album.genre === 'classical' && getCatalogRecordType(album) === 'recording' && !(album.discs || []).some(disc =>
       (disc.works || []).some(work => (work.movements || []).length > 0)) && !(album.tracks || []).length) {
       issues.push({ kind: 'missing-classical-content', albumId: album.id, title, detail: 'No hay obras, movimientos ni pistas documentadas' });
     }
