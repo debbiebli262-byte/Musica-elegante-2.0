@@ -12,6 +12,7 @@ import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
+import { getCatalogRecordType, type CatalogRecordType } from './utils/catalogRecordType';
 import { proposeArtistRepairs, isRepairStillApplicable, type ArtistRepair } from './utils/artistRepairs';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
@@ -1525,7 +1526,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
         <div className="flex-1 min-w-0">
           <h3 className="font-serif text-xl group-hover:text-gold transition-colors truncate">{album.title}</h3>
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold truncate">
-            {artistName}{album.releaseYear && ` • ${album.releaseYear}`}{album.label && ` • ${album.label}`}
+            {artistName}{getCatalogRecordType(album) === 'work' ? ' • Obra musical' : ''}{album.releaseYear && ` • ${album.releaseYear}`}{album.label && ` • ${album.label}`}
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end sm:justify-start">
@@ -1611,7 +1612,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
       <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
         <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors break-words">{album.title}</h4>
         <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
-          <p className="text-[10px] uppercase tracking-widest text-ink/60 font-bold truncate flex-1 mr-2">{artistName}</p>
+          <p className="text-[10px] uppercase tracking-widest text-ink/60 font-bold truncate flex-1 mr-2">{artistName}{getCatalogRecordType(album) === 'work' ? ' · Obra musical' : ''}</p>
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold whitespace-nowrap">
             {[album.releaseYear, album.label].filter(Boolean).join(' • ')}
           </p>
@@ -1781,6 +1782,7 @@ function SearchPage() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState<'year' | 'artist' | 'title' | 'label'>('year');
+  const [recordTypeFilter, setRecordTypeFilter] = useState<'all' | CatalogRecordType>('all');
   const [genreFilter, setGenreFilter] = useState<'all' | Genre>('all');
   const [formatFilter, setFormatFilter] = useState('all');
   const [labelFilter, setLabelFilter] = useState('all');
@@ -1807,6 +1809,7 @@ function SearchPage() {
   const filteredAlbums = [...albums]
     .filter((album) => {
       if (genreFilter !== 'all' && album.genre !== genreFilter) return false;
+      if (recordTypeFilter !== 'all' && getCatalogRecordType(album) !== recordTypeFilter) return false;
       if (formatFilter !== 'all' && !(album.formats || []).includes(formatFilter as 'CD' | 'Vinilo' | 'DVD' | 'Bluray')) return false;
       if (labelFilter !== 'all' && !normalizeRecordLabels(album.label).split(',').some(value => normalizeSearch(value) === normalizeSearch(labelFilter))) return false;
       const year = Number(album.releaseYear);
@@ -1898,7 +1901,14 @@ function SearchPage() {
           </select>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Tipo de registro
+            <select value={recordTypeFilter} onChange={e => setRecordTypeFilter(e.target.value as 'all' | CatalogRecordType)} className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
+              <option value="all">Obras y grabaciones</option>
+              <option value="recording">Discos / grabaciones</option>
+              <option value="work">Obras musicales</option>
+            </select>
+          </label>
           <label className="flex flex-col gap-1 text-xs text-ink/60">Sello discográfico
             <select value={labelFilter} onChange={e => setLabelFilter(e.target.value)}
               className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
@@ -1929,7 +1939,7 @@ function SearchPage() {
             {filteredAlbums.length} resultado{filteredAlbums.length === 1 ? '' : 's'}
           </p>
           <button type="button" className="text-xs underline text-ink/60" onClick={() => {
-            setSearchText(''); setGenreFilter('all'); setFormatFilter('all'); setLabelFilter('all'); setYearFrom(''); setYearTo('');
+            setSearchText(''); setGenreFilter('all'); setFormatFilter('all'); setLabelFilter('all'); setRecordTypeFilter('all'); setYearFrom(''); setYearTo('');
           }}>Limpiar filtros</button>
           <div className="flex bg-ink/5 p-1 rounded-full w-fit">
             <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-full", viewMode === 'grid' ? "bg-paper text-gold" : "text-ink/40")}>
@@ -3849,6 +3859,7 @@ try {
 }
 
 function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album: Album, onClose: () => void, onEdit: () => void, highlightArtistId?: string }) {
+  const isWork = getCatalogRecordType(album) === 'work';
   const [artistName, setArtistName] = useState<string>(album.artistName || '');
   const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0);
   const classicalMovementCount = (album.discs || []).reduce((total, disc) =>
@@ -3896,6 +3907,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
           
           <div className="space-y-4">
             <div className="space-y-1">
+              {isWork && <p className="text-xs uppercase font-bold tracking-widest text-gold">Obra musical · No es una edición discográfica</p>}
               <h2 className="font-serif text-3xl sm:text-4xl leading-tight break-words">{album.title}</h2>
               <p className="text-gold font-bold uppercase tracking-widest text-sm">{artistName}</p>
             </div>
@@ -3903,7 +3915,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-4 pt-4">
               {album.releaseYear && (
                 <div className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Lanzamiento</span>
+                  <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">{isWork ? 'Año de composición' : 'Lanzamiento'}</span>
                   <p className="text-sm font-medium">{album.releaseYear}</p>
                 </div>
               )}
@@ -4078,6 +4090,12 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
             </div>
           </div>
 
+          {isWork && classicalWorkCount === 0 && !(album.tracks || []).length && (
+            <div className="rounded-2xl border border-gold/20 bg-gold/5 p-4">
+              <h3 className="font-serif text-xl">Ficha de la obra</h3>
+              <p className="text-sm text-ink/65 mt-1">Esta ficha describe una composición, no una grabación específica. No se inventan intérpretes, discos ni movimientos sin una fuente verificable.</p>
+            </div>
+          )}
           {/* Musicians */}
           {album.musicians && album.musicians.length > 0 && (
             <div className="space-y-6">
@@ -4380,6 +4398,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
 function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artistId: string, genre: Genre, onClose: () => void }) {
   const [title, setTitle] = useState(album?.title || '');
   const [releaseYear, setReleaseYear] = useState(album?.releaseYear || '');
+  const [recordType, setRecordType] = useState<CatalogRecordType>(album ? getCatalogRecordType(album) : 'recording');
   const [imageUrl, setImageUrl] = useState(album?.imageUrl || '');
   const [resolving, setResolving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -4659,6 +4678,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   }, []);
 
   const buildAlbumDataForArtist = (targetArtistId: string, targetArtistName: string) => ({
+    recordType,
     title,
     releaseYear,
     imageUrl,
@@ -4747,6 +4767,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     setSaving(true);
     try {
       const data = { 
+        recordType,
         title, 
         releaseYear, 
         imageUrl, 
@@ -4906,8 +4927,18 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {genre === 'classical' && (
+                  <div className="md:col-span-2 space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40" htmlFor="catalog-record-type">Tipo de registro</label>
+                    <select id="catalog-record-type" value={recordType} onChange={e => setRecordType(e.target.value as CatalogRecordType)} className="w-full bg-ink/5 rounded-xl px-4 py-3 text-base">
+                      <option value="recording">Grabación / edición discográfica</option>
+                      <option value="work">Obra musical (sin grabación específica)</option>
+                    </select>
+                    <p className="text-xs text-ink/50">Las obras se muestran separadas de los discos. Cambiar este campo no elimina ninguna pista, intérprete ni edición.</p>
+                  </div>
+                )}
                 <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Título del Álbum</label>
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">{recordType === 'work' ? 'Título de la obra' : 'Título del Álbum'}</label>
                   <input 
                     required
                     value={title}
