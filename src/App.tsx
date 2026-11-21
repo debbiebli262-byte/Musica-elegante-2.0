@@ -1816,107 +1816,105 @@ function ImportWordPage() {
 
   const handleApproveAndSave = async () => {
     if (!selectedFile || !parsedData) return;
+    const composerName = parsedData.composer?.name?.trim();
+    if (!composerName) {
+      setMessage('No se encontró el nombre del compositor. Revisa el archivo antes de aprobarlo.');
+      return;
+    }
 
     setIsApproving(true);
     setMessage('');
 
     try {
-      // The server returns { composer, recordings, albums }
-      // We use composer for artist data, and recordings as the source of album entries
-      const composerData = parsedData.composer;
-      const recordingsData = parsedData.recordings || [];
-      let artistId = '';
+      const importGenre: Genre = importGenreSelection;
+      const artistId = slugifyArtistId(composerName);
+      if (!artistId) throw new Error('El nombre del compositor no produce un identificador válido.');
 
-      if (composerData?.name) {
-        artistId = slugifyArtistId(composerData.name);
-        await setDoc(
-          doc(db, 'artists', artistId),
-          {
-            id: artistId,
-            name: composerData.name,
-            biography: composerData.biography || '',
-            genre: importGenre,
-            birthDate: composerData.birthDate || '',
-            birthPlace: composerData.birthPlace || '',
-            deathDate: composerData.deathDate || '',
-            deathPlace: composerData.deathPlace || '',
-            imageUrl: '',
-            instruments: [],
-            periods: [],
-          },
-          { merge: true }
-        );
+      const composer = parsedData.composer!;
+      await setDoc(doc(db, 'artists', artistId), {
+        name: composerName,
+        genre: importGenre,
+        biography: composer.biography || '',
+        birthDate: composer.birthDate || '',
+        birthPlace: composer.birthPlace || '',
+        deathDate: composer.deathDate || '',
+        deathPlace: composer.deathPlace || '',
+      }, { merge: true });
+
+      const groups = new Map<string, { title: string; recordings: ServerRecording[]; edition: ServerRecording }>();
+      for (const rec of parsedData.recordings || []) {
+        const title = (rec.albumTitle || rec.workTitle || '').trim();
+        if (!title) continue;
+
+        // Different catalog numbers, labels and editions must remain separate releases.
+        const key = [artistId, title, rec.catalogNumber || '', rec.label || '', rec.editionYear || '']
+          .map(value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase())
+          .join('|');
+        const group = groups.get(key);
+        if (group) group.recordings.push(rec);
+        else groups.set(key, { title, recordings: [rec], edition: rec });
       }
 
-      // Convert each recording entry into an album document
-      const importGenre: Genre = importGenreSelection;
-      const skippedAlbums: string[] = [];
-      const savedAlbums: string[] = [];
-
-      for (const rec of recordingsData) {
-        const finalArtistName = composerData?.name || 'unknown_artist';
-        const finalTitle = rec.albumTitle || rec.workTitle || 'Untitled import';
-
+      let savedCount = 0;
+      let skippedCount = 0;
+      for (const { title, recordings, edition } of groups.values()) {
         const albumId = slugifyAlbumId(
-          finalArtistName,
-          finalTitle,
-          rec.editionYear,
-          rec.catalogNumber
+          composerName,
+          title,
+          edition.editionYear || '',
+          [edition.label, edition.catalogNumber].filter(Boolean).join('-')
         );
-
-        // Check if this album already exists in Firebase
-        const existingDoc = await getDoc(doc(db, 'albums', albumId));
-        if (existingDoc.exists()) {
-          skippedAlbums.push(finalTitle);
+        if (!albumId) continue;
+        if ((await getDoc(doc(db, 'albums', albumId))).exists()) {
+          skippedCount++;
           continue;
         }
 
-        // Also check by title+artistId to catch albums created with addDoc (auto-ID)
-        const duplicateQuery = query(
-          collection(db, 'albums'),
-          where('artistId', '==', artistId),
-          where('title', '==', finalTitle)
-        );
-        const duplicateSnapshot = await getDocs(duplicateQuery);
-        if (!duplicateSnapshot.empty) {
-          skippedAlbums.push(finalTitle);
-          continue;
-        }
-
-        savedAlbums.push(finalTitle);
-
-        await setDoc(
-          doc(db, 'albums', albumId),
-          {
-            id: albumId,
-            artistId: artistId,
-            artistName: finalArtistName,
-            title: finalTitle,
-            genre: importGenre,
-            releaseYear: rec.editionYear || '',
-            recordingDates: rec.recordingDate || '',
-            location: rec.recordingLocation || '',
-            label: rec.label || '',
-            catalogNumber: rec.catalogNumber || '',
-            formats: rec.format ? [rec.format] : [],
+        const works: Work[] = recordings.map((rec, index) => ({
+          title: rec.workTitle?.trim() || title,
+          compositionDate: rec.compositionDate || '',
+          orchestra: rec.orchestra || '',
+          conductor: rec.conductor || '',
+          soloists: (rec.soloists || []).map(name => ({ name, instrument: '' })),
+          movements: [{
+            trackNumber: index + 1,
+            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || title,
+            duration: '',
+            notes: [rec.opus, rec.premiereDate, rec.notes].filter(Boolean).join(' · '),
             orchestra: rec.orchestra || '',
-            conductor: rec.conductor || '',
-            soloists: (rec.soloists || []).map((s: string) => ({ name: s, instrument: '' })),
-            compositionDate: rec.compositionDate || '',
-            country: rec.country || '',
-            musicians: (rec.performers || []).map((p: string) => ({ name: p, instrument: '' })),
-            tracks: [],
-            discs: [],
-            anecdotes: rec.notes || '',
-            imageUrl: '',
-            availability: '',
-          },
-          { merge: true }
-        );
+            conductor: rec.conductor || ''
+          }]
+        }));
+
+        const validFormats = ['CD', 'Vinilo', 'DVD', 'Bluray'] as const;
+        const format = validFormats.find(value => value.toLowerCase() === (edition.format || '').trim().toLowerCase());
+        await setDoc(doc(db, 'albums', albumId), {
+          artistId,
+          artistName: composerName,
+          title,
+          genre: importGenre,
+          releaseYear: edition.editionYear || '',
+          recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
+          location: edition.recordingLocation || '',
+          label: edition.label || '',
+          catalogNumber: edition.catalogNumber || '',
+          formats: format ? [format] : [],
+          orchestra: edition.orchestra || '',
+          conductor: edition.conductor || '',
+          country: edition.country || '',
+          musicians: recordings.flatMap(rec => (rec.performers || []).map(name => ({ name, instrument: '' }))),
+          discs: importGenre === 'classical' ? [{ discNumber: 1, works }] : [],
+          tracks: importGenre === 'jazz' ? recordings.map((rec, index) => ({
+            trackNumber: index + 1, title: rec.workTitle || title, duration: ''
+          })) : [],
+          discCount: 1,
+          anecdotes: recordings.map(rec => rec.notes).filter(Boolean).join('\n'),
+          imageUrl: '',
+        });
+        savedCount++;
       }
 
       const uploadedFile = await uploadWordFileToStorage(selectedFile);
-
       await addDoc(collection(db, 'import_jobs'), {
         fileName: selectedFile.name,
         createdAt: new Date().toISOString(),
@@ -1927,21 +1925,10 @@ function ImportWordPage() {
         storagePath: uploadedFile.storagePath,
         extractedData: parsedData,
       });
-
-      let resultMessage = '';
-      if (savedAlbums.length > 0) {
-        resultMessage += `✓ ${savedAlbums.length} grabación(es) guardada(s) en Firebase.`;
-      }
-      if (skippedAlbums.length > 0) {
-        resultMessage += `\n⚠ ${skippedAlbums.length} grabación(es) omitida(s) porque ya existían: ${skippedAlbums.join(', ')}.`;
-      }
-      if (savedAlbums.length === 0 && skippedAlbums.length === 0) {
-        resultMessage = 'No se encontraron grabaciones para guardar.';
-      }
-      setMessage(resultMessage);
+      setMessage(`✓ ${savedCount} álbum(es) guardado(s); ${skippedCount} edición(es) ya existían. ${groups.size === 0 ? 'No se encontraron grabaciones válidas.' : ''}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'artists/albums/import_jobs');
-      setMessage('No se pudieron guardar los datos aprobados en Firebase.');
+      setMessage('No se pudieron guardar todos los datos. Revisa los permisos y vuelve a comprobar los álbumes importados.');
     } finally {
       setIsApproving(false);
     }
@@ -1970,14 +1957,14 @@ function ImportWordPage() {
           </div>
 
           <label className="block rounded-2xl border border-dashed border-ink/20 bg-ink/[0.03] p-6 hover:border-gold/50 transition-colors">
-            <input type="file" accept=".doc,.docx" className="hidden" onChange={handleFileChange} />
+            <input type="file" accept=".docx" className="hidden" onChange={handleFileChange} />
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-ink text-paper flex items-center justify-center">
                 <Upload size={20} />
               </div>
               <div>
                 <p className="font-medium text-ink">{selectedFile ? selectedFile.name : 'Haz clic para elegir un archivo Word'}</p>
-                <p className="text-sm text-ink/50">Formato admitido: .doc y .docx</p>
+                <p className="text-sm text-ink/50">Formato admitido: .docx</p>
               </div>
             </div>
           </label>
@@ -4966,7 +4953,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                               type="number"
                               value={disc.discNumber}
                               onChange={(e) => {
-                                const newDiscs = [...discs];
+                                const newDiscs = structuredClone(discs);
                                 newDiscs[dIdx].discNumber = parseInt(e.target.value);
                                 setDiscs(newDiscs);
                               }}
@@ -4976,7 +4963,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                           <input 
                             value={disc.title || ''}
                             onChange={(e) => {
-                              const newDiscs = [...discs];
+                              const newDiscs = structuredClone(discs);
                               newDiscs[dIdx].title = e.target.value;
                               setDiscs(newDiscs);
                             }}
@@ -4988,7 +4975,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                           <button 
                             type="button"
                             onClick={() => {
-                              const newDiscs = [...discs];
+                              const newDiscs = structuredClone(discs);
                               newDiscs[dIdx].works.push({ title: '', movements: [] });
                               setDiscs(newDiscs);
                             }}
@@ -5013,7 +5000,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                             <button 
                               type="button"
                               onClick={() => {
-                                const newDiscs = [...discs];
+                                const newDiscs = structuredClone(discs);
                                 newDiscs[dIdx].works = newDiscs[dIdx].works.filter((_, i) => i !== wIdx);
                                 setDiscs(newDiscs);
                               }}
@@ -5028,7 +5015,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.title}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].title = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5044,7 +5031,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.orchestra || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].orchestra = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5056,7 +5043,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.conductor || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].conductor = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5071,7 +5058,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.compositionPlace || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].compositionPlace = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5083,7 +5070,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.compositionDate || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].compositionDate = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5098,7 +5085,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.founderName || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].founderName = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5110,7 +5097,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.choirMaster || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].choirMaster = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5125,7 +5112,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.foundationPlace || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].foundationPlace = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5137,7 +5124,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.foundationDate || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].foundationDate = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5152,7 +5139,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <button 
                                   type="button"
                                   onClick={() => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     if (!newDiscs[dIdx].works[wIdx].soloists) newDiscs[dIdx].works[wIdx].soloists = [];
                                     newDiscs[dIdx].works[wIdx].soloists!.push({ name: '', instrument: '', birthDate: '', birthPlace: '', deathDate: '', deathPlace: '' });
                                     setDiscs(newDiscs);
@@ -5169,7 +5156,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                     <button 
                                       type="button"
                                       onClick={() => {
-                                        const newDiscs = [...discs];
+                                        const newDiscs = structuredClone(discs);
                                         newDiscs[dIdx].works[wIdx].soloists = newDiscs[dIdx].works[wIdx].soloists!.filter((_, i) => i !== sIdx);
                                         setDiscs(newDiscs);
                                       }}
@@ -5181,7 +5168,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.name}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].name = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5191,7 +5178,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.instrument}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].instrument = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5203,7 +5190,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.birthDate || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].birthDate = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5213,7 +5200,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.birthPlace || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].birthPlace = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5225,7 +5212,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.deathDate || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].deathDate = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5235,7 +5222,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.deathPlace || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].deathPlace = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5254,7 +5241,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <button 
                                   type="button"
                                   onClick={() => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     const trackNum = newDiscs[dIdx].works[wIdx].movements.length + 1;
                                     newDiscs[dIdx].works[wIdx].movements.push({ trackNumber: trackNum, title: '', duration: '' });
                                     setDiscs(newDiscs);
@@ -5274,7 +5261,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                         <select 
                                           value={mov.side || 'A'}
                                           onChange={(e) => {
-                                            const newDiscs = [...discs];
+                                            const newDiscs = structuredClone(discs);
                                             newDiscs[dIdx].works[wIdx].movements[mIdx].side = e.target.value as 'A' | 'B';
                                             setDiscs(newDiscs);
                                           }}
@@ -5287,7 +5274,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={mov.title}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements[mIdx].title = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5297,7 +5284,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={mov.duration}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements[mIdx].duration = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5307,7 +5294,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <button 
                                         type="button"
                                         onClick={() => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements = newDiscs[dIdx].works[wIdx].movements.filter((_, i) => i !== mIdx);
                                           setDiscs(newDiscs);
                                         }}
@@ -5325,7 +5312,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.orchestra || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].orchestra = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5337,7 +5324,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.conductor || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].conductor = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5352,7 +5339,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.compositionPlace || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].compositionPlace = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5364,7 +5351,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.compositionDate || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].compositionDate = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5379,7 +5366,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.founderName || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].founderName = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5391,7 +5378,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.choirMaster || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].choirMaster = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5406,7 +5393,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.foundationPlace || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].foundationPlace = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5418,7 +5405,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.foundationDate || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].foundationDate = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5433,7 +5420,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <button 
                                             type="button"
                                             onClick={() => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               if (!newDiscs[dIdx].works[wIdx].movements[mIdx].soloists) newDiscs[dIdx].works[wIdx].movements[mIdx].soloists = [];
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].soloists!.push({ name: '', instrument: '', birthDate: '', birthPlace: '', deathDate: '', deathPlace: '' });
                                               setDiscs(newDiscs);
@@ -5450,7 +5437,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                               <button 
                                                 type="button"
                                                 onClick={() => {
-                                                  const newDiscs = [...discs];
+                                                  const newDiscs = structuredClone(discs);
                                                   newDiscs[dIdx].works[wIdx].movements[mIdx].soloists = newDiscs[dIdx].works[wIdx].movements[mIdx].soloists!.filter((_, i) => i !== sIdx);
                                                   setDiscs(newDiscs);
                                                 }}
@@ -5462,7 +5449,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.name}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].name = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5472,7 +5459,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.instrument}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].instrument = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5484,7 +5471,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.birthDate || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].birthDate = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5494,7 +5481,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.birthPlace || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].birthPlace = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5506,7 +5493,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.deathDate || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].deathDate = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5516,7 +5503,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.deathPlace || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].deathPlace = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -6042,89 +6029,14 @@ function MainLayout() {
         </Routes>
       </main>
       <Footer />
-      <SeedButton />
-      <CleanupButton />
+      {/* Seed data is never injected into a live collection automatically. */}
+      {/* Destructive duplicate cleanup is intentionally disabled. Editions may share titles. */}
     </div>
   );
 }
 
 
 export default function App() {
-  useEffect(() => {
-    const migrateArtistDocumentIds = async () => {
-      try {
-        const artistsSnapshot = await getDocs(collection(db, 'artists'));
-        const artists = artistsSnapshot.docs.map((artistDoc) => ({ id: artistDoc.id, ...artistDoc.data() } as Artist));
-
-        for (const artist of artists) {
-          const desiredId = slugifyArtistId(artist.name || '');
-          if (!desiredId || artist.id === desiredId) continue;
-
-          const targetRef = doc(db, 'artists', desiredId);
-          const targetSnap = await getDoc(targetRef);
-
-          if (!targetSnap.exists()) {
-            const { id, ...artistData } = artist;
-            await setDoc(targetRef, artistData, { merge: true });
-
-            const albumsSnapshot = await getDocs(query(collection(db, 'albums'), where('artistId', '==', artist.id)));
-            for (const albumDoc of albumsSnapshot.docs) {
-              await updateDoc(doc(db, 'albums', albumDoc.id), {
-                artistId: desiredId,
-                artistName: artist.name || albumDoc.data().artistName || ''
-              });
-            }
-
-            await deleteDoc(doc(db, 'artists', artist.id));
-          }
-        }
-      } catch (error) {
-        console.error('Artist ID migration failed:', error);
-      }
-    };
-
-    migrateArtistDocumentIds();
-
-    const autoCleanup = async () => {
-      try {
-        // Cleanup Artists
-        const artistsSnapshot = await getDocs(collection(db, 'artists'));
-        const artists = artistsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Artist));
-        const artistGroups: { [key: string]: string[] } = {};
-        artists.forEach(artist => {
-          const key = `${artist.name.toLowerCase().trim()}_${artist.genre}`;
-          if (!artistGroups[key]) artistGroups[key] = [];
-          artistGroups[key].push(artist.id);
-        });
-        for (const key in artistGroups) {
-          const ids = artistGroups[key];
-          if (ids.length > 1) {
-            for (let i = 1; i < ids.length; i++) await deleteDoc(doc(db, 'artists', ids[i]));
-          }
-        }
-
-        // Cleanup Albums
-        const albumsSnapshot = await getDocs(collection(db, 'albums'));
-        const albums = albumsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Album));
-        const albumGroups: { [key: string]: string[] } = {};
-        albums.forEach(album => {
-          const key = `${album.title.toLowerCase().trim()}_${album.artistId}`;
-          if (!albumGroups[key]) albumGroups[key] = [];
-          albumGroups[key].push(album.id);
-        });
-        for (const key in albumGroups) {
-          const ids = albumGroups[key];
-          if (ids.length > 1) {
-            for (let i = 1; i < ids.length; i++) await deleteDoc(doc(db, 'albums', ids[i]));
-          }
-        }
-      } catch (e) {
-        console.error('Auto-cleanup failed:', e);
-      }
-    };
-    autoCleanup();
-  }, []);
-
   return (
     <ErrorBoundary>
       <AuthProvider>
