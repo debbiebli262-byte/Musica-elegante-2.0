@@ -385,10 +385,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const allArtistNames = Array.from(new Set([...releaseArtists, ...tracklistArtists]));
 
-    const artist = allArtistNames.length > 0 ? allArtistNames.join(", ") :
-      Array.isArray(releaseData?.artists) && releaseData.artists.length > 0
-        ? releaseData.artists.map((a: DiscogsArtist) => a.name).filter(Boolean).join(", ")
-        : "";
+    const primaryArtist = releaseArtists[0] || allArtistNames[0] || "";
+    const artist = primaryArtist;
 
     const labelValues: string[] = Array.isArray(releaseData?.labels)
       ? releaseData.labels.map((l: DiscogsLabel) => l.name || "")
@@ -411,6 +409,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       title: releaseData?.title || found.title || "",
       artist,
+      primaryArtist,
+      releaseDate: /^\d{4}-\d{2}-\d{2}$/.test(String(releaseData?.released || ""))
+        ? releaseData.released : "",
       year: releaseData?.year || found.year || "",
       country: releaseData?.country || found.country || "",
       format: Array.isArray(found.format) ? found.format.join(", ") : "",
