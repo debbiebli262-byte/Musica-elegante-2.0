@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
 import { getCatalogRecordType, type CatalogRecordType } from './utils/catalogRecordType';
 import { proposeVerifiedTracklists, isVerifiedTracklistStillApplicable, type VerifiedTracklistProposal } from './utils/verifiedTracklists';
@@ -4694,6 +4695,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [allAlbums, setAllAlbums] = useState<Album[]>([]);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [albumSaveError, setAlbumSaveError] = useState('');
 
   useEffect(() => {
     if (!artistName && artistId) {
@@ -5011,8 +5013,15 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+    setAlbumSaveError('');
+    const validationError = validateAlbumSave(title, artistName, Boolean(album));
+    if (validationError) {
+      setAlbumSaveError(validationError);
+      return;
+    }
     if (discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
-      alert('Selecciona el sello discográfico de tu edición antes de guardar.');
+      setAlbumSaveError('Selecciona el sello discográfico de tu edición antes de guardar.');
       return;
     }
     setSaving(true);
@@ -5025,7 +5034,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         artistId, 
         genre, 
         sidemenIds,
-        artistName,
+        ...artistNameUpdate(artistName, Boolean(album)),
         recordingDates,
         releaseDate,
         location,
@@ -5079,7 +5088,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     } catch (error) {
       const errInfo = handleFirestoreError(error, album ? OperationType.UPDATE : OperationType.CREATE, 'albums');
       console.error('Album save failed:', errInfo);
-      alert('No se pudo guardar el álbum. Revisa la consola para ver el error exacto.');
+      setAlbumSaveError('No se pudo guardar el álbum. ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setSaving(false);
     }
@@ -5113,7 +5122,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
         className="mobile-dialog relative w-full max-w-3xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"
       >
-        <form onSubmit={handleSubmit} className="classical-editor flex flex-col h-full min-h-0 overflow-hidden">
+        <form onSubmit={handleSubmit} noValidate className="classical-editor flex flex-col h-full min-h-0 overflow-hidden">
           <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-ink/10 flex items-center justify-between gap-3 bg-paper shrink-0">
             <h2 className="font-serif text-3xl italic">{album ? 'Editar Álbum' : 'Nuevo Álbum'}</h2>
             <button type="button" onClick={onClose} className="text-ink/40 hover:text-ink transition-colors"><X size={24} /></button>
@@ -6292,6 +6301,9 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
           </div>
 
           <div className="mobile-dialog-footer sticky bottom-0 bg-paper px-4 sm:px-8 py-3 sm:py-6 border-t border-ink/10 flex flex-wrap items-center justify-between gap-3 shrink-0">
+            {albumSaveError && (
+              <p role="alert" className="w-full text-sm font-medium text-red-600 break-words">{albumSaveError}</p>
+            )}
             {album && (
               <div className="flex items-center gap-4">
                 {isConfirmingDelete ? (
