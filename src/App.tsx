@@ -9,6 +9,7 @@ import { Artist, Album, CollectionItem, Genre, Musician, Track, Disc, Work, Move
 import { OperationType, handleFirestoreError, getArtistByName, saveArtistData } from './firestoreUtils';
 import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
+import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -653,6 +654,37 @@ function GenrePage({ genre }: { genre: Genre }) {
   const [isAdding, setIsAdding] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'none'>('none');
+  const { isAdmin } = useAuth();
+  const [addingImages, setAddingImages] = useState(false);
+  const [imageFeedback, setImageFeedback] = useState('');
+
+  const fillMissingPortraits = async () => {
+    const missing = artists.filter(artist => !artist.imageUrl?.trim());
+    if (!missing.length || !isAdmin || addingImages) return;
+    if (!window.confirm(`Buscar y guardar retratos para ${missing.length} artistas sin imagen? No se modificarán las fotos existentes.`)) return;
+    setAddingImages(true);
+    setImageFeedback('Buscando imágenes...');
+    let updated = 0;
+    let unresolved = 0;
+    let failed = 0;
+    for (const artist of missing) {
+      try {
+        const imageUrl = await findArtistPortrait(artist.name);
+        if (!imageUrl) { unresolved++; continue; }
+        const artistRef = doc(db, 'artists', artist.id);
+        const current = await getDoc(artistRef);
+        if (!current.exists() || current.data().imageUrl) continue;
+        await updateDoc(artistRef, { imageUrl });
+        updated++;
+      } catch (error) {
+        failed++;
+        console.error('Could not save portrait for', artist.name, error);
+      }
+    }
+    setImageFeedback(`${updated} fotos guardadas; ${unresolved} sin coincidencia segura; ${failed} errores.`);
+    setAddingImages(false);
+  };
+
 
   useEffect(() => {
     const q = query(collection(db, 'artists'), where('genre', '==', genre));
@@ -707,7 +739,13 @@ function GenrePage({ genre }: { genre: Genre }) {
             <ArrowDownAZ size={16} />
             <span>A-Z</span>
           </button>
-          <button 
+          {isAdmin && artists.some(artist => !artist.imageUrl?.trim()) && (
+            <button type="button" onClick={fillMissingPortraits} disabled={addingImages}
+              className="px-4 py-3 border border-gold text-gold rounded-full text-xs font-bold disabled:opacity-50">
+              {addingImages ? 'Buscando fotos...' : 'Completar fotos'}
+            </button>
+          )}
+          <button
             onClick={() => setIsAdding(true)}
             className="flex items-center justify-center gap-2 px-5 sm:px-6 py-3 bg-ink text-paper rounded-full text-sm font-medium hover:bg-gold transition-colors min-h-11"
           >
@@ -717,6 +755,7 @@ function GenrePage({ genre }: { genre: Genre }) {
         </div>
       </div>
 
+      {imageFeedback && <p role="status" className="text-sm text-ink/60">{imageFeedback}</p>}
       <div className={cn(
         "grid gap-10",
         viewMode === 'grid' ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-1"
@@ -746,13 +785,14 @@ function GenrePage({ genre }: { genre: Genre }) {
 }
 
 function ArtistCard({ artist, viewMode = 'grid' }: { artist: Artist, viewMode?: 'grid' | 'list' }) {
+  const portrait = useArtistPortrait(artist.name, artist.imageUrl);
   if (viewMode === 'list') {
     return (
       <Link to={`/artist/${artist.id}`} className="group flex items-center gap-6 p-4 rounded-2xl hover:bg-ink/5 transition-colors">
         <div className="w-16 h-16 rounded-xl overflow-hidden bg-ink/5 flex-shrink-0">
-          {artist.imageUrl ? (
+          {portrait ? (
             <img 
-              src={artist.imageUrl} 
+              src={portrait} 
               alt={artist.name} 
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
@@ -775,9 +815,9 @@ function ArtistCard({ artist, viewMode = 'grid' }: { artist: Artist, viewMode?: 
   return (
     <Link to={`/artist/${artist.id}`} className="group block space-y-4">
       <div className="relative aspect-square rounded-2xl overflow-hidden bg-ink/5">
-        {artist.imageUrl ? (
+        {portrait ? (
           <img 
-            src={artist.imageUrl} 
+            src={portrait} 
             alt={artist.name} 
             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
             referrerPolicy="no-referrer"
@@ -809,6 +849,7 @@ function ArtistDetail() {
   const [isEditing, setIsEditing] = useState(false);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [showLoadingPopup, setShowLoadingPopup] = useState(false);
+  const portrait = useArtistPortrait(artist?.name || '', artist?.imageUrl);
   const navigate = useNavigate();
   const lastGenre = useRef<Genre | null>(null);
 
@@ -903,7 +944,7 @@ function ArtistDetail() {
       <section className="relative min-h-[340px] h-[48vh] md:h-[60vh] flex items-end px-4 sm:px-6 pb-8 md:pb-12 overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img
-            src={artist.imageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=1920'}
+            src={portrait || '/Vinyl.jpg'}
             alt={artist.name}
             className="w-full h-full object-cover opacity-50 grayscale"
             referrerPolicy="no-referrer"
@@ -1115,7 +1156,7 @@ function ArtistDetail() {
 
           <div className="aspect-[3/4] rounded-3xl overflow-hidden shadow-xl">
             <img
-              src={artist.imageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=1000'}
+              src={portrait || '/Vinyl.jpg'}
               alt={artist.name}
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
@@ -2970,6 +3011,7 @@ function ArtistModal({ artist, genre, onClose }: { artist?: Artist, genre: Genre
   const [periods, setPeriods] = useState<string[]>(artist?.periods || []);
   const [autoGenerateDiscography, setAutoGenerateDiscography] = useState(false);
   const [fetchingMetadata, setFetchingMetadata] = useState(false);
+  const [findingPortrait, setFindingPortrait] = useState(false);
   const [allArtists, setAllArtists] = useState<Artist[]>([]);
   const [resolving, setResolving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -3059,6 +3101,18 @@ try {
     });
     return unsubscribe;
   }, []);
+
+  const handleFindPortrait = async () => {
+    if (!name.trim() || imageUrl.trim()) return;
+    setFindingPortrait(true);
+    try {
+      const portrait = await findArtistPortrait(name);
+      if (portrait) setImageUrl(portrait);
+      else alert('No se encontró una imagen verificada. Puedes subir una foto manualmente.');
+    } finally {
+      setFindingPortrait(false);
+    }
+  };
 
   const handleFetchMetadata = async () => {
     if (!name.trim()) return;
