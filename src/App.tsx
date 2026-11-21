@@ -2398,120 +2398,142 @@ function ImportWordPage() {
   };
 
   const handleApproveAndSave = async () => {
-    if (!selectedFile || !parsedData) return;
-    const composerName = parsedData.composer?.name?.trim();
-    if (!composerName) {
-      setMessage('No se encontró el nombre del compositor. Revisa el archivo antes de aprobarlo.');
+    if (!selectedFile || !parsedData || isApproving) return;
+    const person = parsedData.composer;
+    const name = person?.name?.trim();
+    if (!name) {
+      setMessage('No se encontró el nombre del artista. Revisa el documento antes de guardar.');
       return;
     }
+    const albumsToSave = albumsForImport.filter(item => item.title.trim());
+    if (albumsToSave.length < albumsForImport.length) {
+      setMessage('Hay ediciones sin título. Corrige el Word antes de guardar: no se crearán álbumes sin identificar.');
+      return;
+    }
+    if (!window.confirm(`¿Guardar la ficha de ${name} y ${albumsToSave.length} edición(es) revisadas? No se sobrescribirán álbumes existentes.`)) return;
 
     setIsApproving(true);
     setMessage('');
-
+    let savedCount = 0;
+    let skippedCount = 0;
     try {
-      const importGenre: Genre = importGenreSelection;
-      const artistId = slugifyArtistId(composerName);
-      if (!artistId) throw new Error('El nombre del compositor no produce un identificador válido.');
-
-      const composer = parsedData.composer!;
-      await setDoc(doc(db, 'artists', artistId), {
-        name: composerName,
-        genre: importGenre,
-        biography: composer.biography || '',
-        birthDate: composer.birthDate || '',
-        birthPlace: composer.birthPlace || '',
-        deathDate: composer.deathDate || '',
-        deathPlace: composer.deathPlace || '',
-      }, { merge: true });
-
-      const groups = new Map<string, { title: string; recordings: ServerRecording[]; edition: ServerRecording }>();
-      for (const rec of parsedData.recordings || []) {
-        const title = (rec.albumTitle || rec.workTitle || '').trim();
-        if (!title) continue;
-
-        // Different catalog numbers, labels and editions must remain separate releases.
-        const key = [artistId, title, rec.catalogNumber || '', rec.label || '', rec.editionYear || '']
-          .map(value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase())
-          .join('|');
-        const group = groups.get(key);
-        if (group) group.recordings.push(rec);
-        else groups.set(key, { title, recordings: [rec], edition: rec });
+      // Look up existing names; using only a generated slug can create two artist records.
+      const existingByName = await getArtistByName(name);
+      const artistId = (existingByName?.id as string | undefined) || slugifyArtistId(name);
+      if (!artistId) throw new Error('El nombre del artista no permite crear un identificador.');
+      const artistRef = doc(db, 'artists', artistId);
+      const artistSnapshot = await getDoc(artistRef);
+      const existing = artistSnapshot.exists() ? artistSnapshot.data() as Partial<Artist> : null;
+      let allowBiographyReplacement = false;
+      const proposedBiography = String(person?.biography || '').trim();
+      if (proposedBiography && existing?.biography?.trim() &&
+          existing.biography.trim() !== proposedBiography) {
+        allowBiographyReplacement = window.confirm(
+          `La ficha de ${name} ya tiene una biografía. ¿Quieres REEMPLAZARLA con el texto completo del Word? Pulsa Cancelar para conservar la actual.`
+        );
+      }
+      const artistChanges: Record<string, unknown> = {
+        ...(existing ? {} : {name, genre: importGenreSelection}),
+      };
+      if (mayReplaceBiography(existing?.biography, proposedBiography, allowBiographyReplacement)) {
+        artistChanges.biography = proposedBiography;
+      }
+      // Fill missing biographical fields only. Never erase information previously saved.
+      for (const field of ['birthDate', 'deathDate', 'birthPlace', 'deathPlace'] as const) {
+        if (!existing?.[field] && person?.[field]) artistChanges[field] = person[field];
+      }
+      if (Object.keys(artistChanges).length) {
+        await setDoc(artistRef, artistChanges, {merge: true});
       }
 
-      let savedCount = 0;
-      let skippedCount = 0;
-      for (const { title, recordings, edition } of groups.values()) {
-        const albumId = slugifyAlbumId(
-          composerName,
-          title,
-          edition.editionYear || '',
-          [edition.label, edition.catalogNumber].filter(Boolean).join('-')
-        );
-        if (!albumId) continue;
-        if ((await getDoc(doc(db, 'albums', albumId))).exists()) {
-          skippedCount++;
-          continue;
-        }
+      // Existing editions are checked using release identity rather than artist affiliation.
+      const existingAlbumSnapshot = await getDocs(collection(db, 'albums'));
+      const existingAlbums = existingAlbumSnapshot.docs.map(item => item.data() as Album & {
+        discogsReleaseId?: number; barcode?: string;
+      });
+      const norm = (value: unknown) => String(value || '').normalize('NFKC').trim().toLowerCase().replace(/[\s-]+/g, '');
+      const alreadySaved = (candidate: typeof albumsToSave[number]) => existingAlbums.some(album =>
+        ('discogsReleaseId' in candidate && candidate.discogsReleaseId &&
+          album.discogsReleaseId === candidate.discogsReleaseId) ||
+        (norm(candidate.catalogNumber || candidate.barcode) &&
+          [album.catalogNumber, album.barcode].some(value => norm(value) === norm(candidate.catalogNumber || candidate.barcode)) &&
+          norm(album.label) === norm(candidate.label) &&
+          (album.formats || []).some(format => norm(format) === norm(candidate.format)))
+      );
 
+      for (const candidate of albumsToSave) {
+        if (alreadySaved(candidate)) { skippedCount++; continue; }
+        const candidateKey = normalizedEditionKey(candidate);
+        const editionId = slugifyAlbumId(name, candidate.title, candidate.editionYear,
+          [candidate.label, candidate.catalogNumber, candidate.barcode, candidate.format].filter(Boolean).join('-'));
+        if (!editionId) continue;
+        const targetRef = doc(db, 'albums', editionId);
+        if ((await getDoc(targetRef)).exists()) { skippedCount++; continue; }
+
+        const recordings = (parsedData.recordings || []).filter(item => sameWordEdition(candidate, item));
         const works: Work[] = recordings.map((rec, index) => ({
-          title: rec.workTitle?.trim() || title,
+          title: rec.workTitle?.trim() || candidate.title,
           compositionDate: rec.compositionDate || '',
           orchestra: rec.orchestra || '',
           conductor: rec.conductor || '',
-          soloists: (rec.soloists || []).map(name => ({ name, instrument: '' })),
+          soloists: (rec.soloists || []).map(soloist => ({name: soloist, instrument: ''})),
           movements: [{
             trackNumber: index + 1,
-            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || title,
+            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || candidate.title,
             duration: '',
             notes: [rec.opus, rec.premiereDate, rec.notes].filter(Boolean).join(' · '),
-            orchestra: rec.orchestra || '',
-            conductor: rec.conductor || ''
-          }]
+          }],
         }));
-
-        const validFormats = ['CD', 'Vinilo', 'DVD', 'Bluray'] as const;
-        const format = validFormats.find(value => value.toLowerCase() === (edition.format || '').trim().toLowerCase());
-        await setDoc(doc(db, 'albums', albumId), {
-          artistId,
-          artistName: composerName,
-          title,
-          genre: importGenre,
-          releaseYear: edition.editionYear || '',
+        const enriched = enrichedWordAlbums[candidateKey];
+        const formatName = candidate.format.toLowerCase();
+        const selectedFormat = formatName.includes('vinyl') || formatName.includes('vinilo') || formatName.includes('lp') ? 'Vinilo'
+          : formatName.includes('cd') ? 'CD' : formatName.includes('dvd') ? 'DVD' : '';
+        await setDoc(targetRef, {
+          artistId, artistName: name, allArtistIds: [artistId],
+          title: candidate.title.trim(), genre: importGenreSelection,
+          releaseYear: candidate.editionYear || '',
+          label: normalizeRecordLabels(candidate.label), catalogNumber: candidate.catalogNumber || '',
+          barcode: candidate.barcode || '', country: candidate.country || '',
+          formats: selectedFormat ? [selectedFormat] : [],
+          discCount: candidate.discCount || 1,
           recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
-          location: edition.recordingLocation || '',
-          label: normalizeRecordLabels(edition.label || ''),
-          catalogNumber: edition.catalogNumber || '',
-          formats: format ? [format] : [],
-          orchestra: edition.orchestra || '',
-          conductor: edition.conductor || '',
-          country: edition.country || '',
-          musicians: recordings.flatMap(rec => (rec.performers || []).map(name => ({ name, instrument: '' }))),
-          discs: importGenre === 'classical' ? [{ discNumber: 1, works }] : [],
-          tracks: importGenre === 'jazz' ? recordings.map((rec, index) => ({
-            trackNumber: index + 1, title: rec.workTitle || title, duration: ''
-          })) : [],
-          discCount: 1,
-          anecdotes: recordings.map(rec => rec.notes).filter(Boolean).join('\n'),
-          imageUrl: '',
+          location: recordings.find(rec => rec.recordingLocation)?.recordingLocation || '',
+          orchestra: enriched?.orchestra || recordings.find(rec => rec.orchestra)?.orchestra || '',
+          conductor: enriched?.conductor || recordings.find(rec => rec.conductor)?.conductor || '',
+          producer: enriched?.producer || '', engineer: enriched?.engineer || '',
+          musicians: recordings.flatMap(rec => (rec.performers || []).map(person => ({name: person, instrument: ''}))),
+          discs: importGenreSelection === 'classical'
+            ? (enriched?.discs?.length ? enriched.discs : (works.length ? [{discNumber: 1, works}] : []))
+            : [],
+          tracks: importGenreSelection === 'jazz'
+            ? (enriched?.tracks?.length ? enriched.tracks : recordings.map((rec, index) => ({
+                trackNumber: index + 1, title: rec.workTitle || candidate.title, duration: ''
+              })))
+            : [],
+          anecdotes: [candidate.notes, ...recordings.map(rec => rec.notes)].filter(Boolean).join('\n'),
+          imageUrl: enriched?.imageUrl || '',
+          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
         });
         savedCount++;
+        existingAlbums.push({
+          id: editionId, artistId, title: candidate.title, genre: importGenreSelection,
+          label: candidate.label, catalogNumber: candidate.catalogNumber, barcode: candidate.barcode,
+          formats: selectedFormat ? [selectedFormat as 'CD' | 'Vinilo' | 'DVD'] : [],
+          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
+        });
       }
 
       const uploadedFile = await uploadWordFileToStorage(selectedFile);
       await addDoc(collection(db, 'import_jobs'), {
-        fileName: selectedFile.name,
-        createdAt: new Date().toISOString(),
-        approvedAt: new Date().toISOString(),
-        status: 'approved',
-        source: 'word_upload',
-        fileUrl: uploadedFile.downloadURL,
-        storagePath: uploadedFile.storagePath,
+        fileName: selectedFile.name, createdAt: new Date().toISOString(),
+        approvedAt: new Date().toISOString(), status: 'approved',
+        source: 'word_upload', fileUrl: uploadedFile.downloadURL, storagePath: uploadedFile.storagePath,
         extractedData: parsedData,
       });
-      setMessage(`✓ ${savedCount} álbum(es) guardado(s); ${skippedCount} edición(es) ya existían. ${groups.size === 0 ? 'No se encontraron grabaciones válidas.' : ''}`);
+      setMessage(`✓ ${savedCount} álbum(es) nuevos guardados; ${skippedCount} ediciones existentes omitidas. Ficha del artista actualizada sin borrar datos existentes.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'artists/albums/import_jobs');
-      setMessage('No se pudieron guardar todos los datos. Revisa los permisos y vuelve a comprobar los álbumes importados.');
+      setMessage(`Error después de guardar ${savedCount} álbum(es). No repitas el proceso sin revisar el catálogo: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsApproving(false);
     }
