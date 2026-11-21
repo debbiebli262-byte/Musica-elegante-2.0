@@ -473,8 +473,9 @@ Devuelve SOLO JSON válido con estas claves:
     let filePath: string | undefined;
 
     try {
-      filePath = req.file?.path;
-      const originalName = req.file?.originalname || "";
+      const uploadedFile = (req as typeof req & { file?: { path: string; originalname: string } }).file;
+      filePath = uploadedFile?.path;
+      const originalName = uploadedFile?.originalname || "";
 
       console.log("Uploading file:", originalName);
 
