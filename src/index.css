@@ -18,3 +18,23 @@
   }
 }
 
+
+/* Touch-friendly layout and full-height editing dialogs on small screens. */
+@media (max-width: 639px) {
+  html, body, #root { min-width: 0; max-width: 100%; }
+  body { overflow-x: hidden; }
+  .mobile-dialog { min-height: 0; overscroll-behavior: contain; }
+  .mobile-dialog input, .mobile-dialog select, .mobile-dialog textarea { font-size: 16px; min-width: 0; max-width: 100%; }
+  .mobile-dialog button { min-height: 40px; }
+  .classical-editor .grid.grid-cols-2, .classical-editor .grid.grid-cols-3 { grid-template-columns: minmax(0, 1fr); }
+  .classical-editor .flex { min-width: 0; }
+  .classical-editor .flex-grow { min-width: 0; }
+  .classical-editor .w-1\/2 { width: 100%; }
+  .classical-editor input, .classical-editor textarea { overflow-wrap: anywhere; }
+  .album-detail-dialog { -webkit-overflow-scrolling: touch; }
+  .mobile-dialog-footer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .mobile-dialog-footer > * { min-width: 0; }
+}
+@media (hover: none), (pointer: coarse) {
+  .album-card-actions { transform: none !important; }
+}

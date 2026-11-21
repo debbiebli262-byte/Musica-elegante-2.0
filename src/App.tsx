@@ -9,6 +9,7 @@ import { Artist, Album, CollectionItem, Genre, Musician, Track, Disc, Work, Move
 import { OperationType, handleFirestoreError, getArtistByName, saveArtistData } from './firestoreUtils';
 import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
+import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -194,7 +195,7 @@ function Navbar() {
   ];
 
   return (
-    <nav className="sticky top-0 z-50 bg-paper/90 backdrop-blur-md border-b border-ink/10 px-4 md:px-6 py-4">
+    <nav className="sticky top-0 z-50 bg-paper/95 backdrop-blur-md border-b border-ink/10 px-4 md:px-6 py-3 md:py-4">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
         <Link to="/" className="flex items-center gap-2 group min-w-0">
           <div className="w-10 h-10 rounded-full bg-ink flex items-center justify-center text-paper transition-transform group-hover:scale-110 shrink-0">
@@ -223,8 +224,9 @@ function Navbar() {
           type="button"
           onClick={() => setMobileMenuOpen((prev) => !prev)}
           className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded-full border border-ink/10 bg-paper text-ink hover:text-gold transition-colors"
-          aria-label="Abrir menú"
+          aria-label={mobileMenuOpen ? "Cerrar menú" : "Abrir menú"}
           aria-expanded={mobileMenuOpen}
+          aria-controls="mobile-navigation"
         >
           {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
@@ -236,7 +238,8 @@ function Navbar() {
             initial={{ opacity: 0, y: -12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}
-            className="md:hidden max-w-7xl mx-auto mt-4 rounded-3xl border border-ink/10 bg-paper shadow-xl overflow-hidden"
+            id="mobile-navigation"
+            className="md:hidden absolute top-full inset-x-3 mt-2 rounded-2xl border border-ink/10 bg-paper shadow-xl overflow-hidden"
           >
             <div className="flex flex-col py-2">
               {navItems.map((item) => (
@@ -651,6 +654,37 @@ function GenrePage({ genre }: { genre: Genre }) {
   const [isAdding, setIsAdding] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'none'>('none');
+  const { isAdmin } = useAuth();
+  const [addingImages, setAddingImages] = useState(false);
+  const [imageFeedback, setImageFeedback] = useState('');
+
+  const fillMissingPortraits = async () => {
+    const missing = artists.filter(artist => !artist.imageUrl?.trim());
+    if (!missing.length || !isAdmin || addingImages) return;
+    if (!window.confirm(`Buscar y guardar retratos para ${missing.length} artistas sin imagen? No se modificarán las fotos existentes.`)) return;
+    setAddingImages(true);
+    setImageFeedback('Buscando imágenes...');
+    let updated = 0;
+    let unresolved = 0;
+    let failed = 0;
+    for (const artist of missing) {
+      try {
+        const imageUrl = await findArtistPortrait(artist.name);
+        if (!imageUrl) { unresolved++; continue; }
+        const artistRef = doc(db, 'artists', artist.id);
+        const current = await getDoc(artistRef);
+        if (!current.exists() || current.data().imageUrl) continue;
+        await updateDoc(artistRef, { imageUrl });
+        updated++;
+      } catch (error) {
+        failed++;
+        console.error('Could not save portrait for', artist.name, error);
+      }
+    }
+    setImageFeedback(`${updated} fotos guardadas; ${unresolved} sin coincidencia segura; ${failed} errores.`);
+    setAddingImages(false);
+  };
+
 
   useEffect(() => {
     const q = query(collection(db, 'artists'), where('genre', '==', genre));
@@ -668,13 +702,13 @@ function GenrePage({ genre }: { genre: Genre }) {
   });
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-20 space-y-12">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 sm:py-20 space-y-8 sm:space-y-12">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div className="space-y-4">
           <span className="text-xs uppercase tracking-widest font-bold text-gold">Explorar Género</span>
-          <h1 className="font-serif text-6xl md:text-8xl capitalize">{genre === 'classical' ? 'Música Clásica' : genre}</h1>
+          <h1 className="font-serif text-4xl sm:text-6xl md:text-8xl capitalize leading-tight break-words">{genre === 'classical' ? 'Música Clásica' : genre}</h1>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex bg-ink/5 p-1 rounded-full">
             <button 
               onClick={() => setViewMode('grid')}
@@ -705,9 +739,15 @@ function GenrePage({ genre }: { genre: Genre }) {
             <ArrowDownAZ size={16} />
             <span>A-Z</span>
           </button>
-          <button 
+          {isAdmin && artists.some(artist => !artist.imageUrl?.trim()) && (
+            <button type="button" onClick={fillMissingPortraits} disabled={addingImages}
+              className="px-4 py-3 border border-gold text-gold rounded-full text-xs font-bold disabled:opacity-50">
+              {addingImages ? 'Buscando fotos...' : 'Completar fotos'}
+            </button>
+          )}
+          <button
             onClick={() => setIsAdding(true)}
-            className="flex items-center gap-2 px-6 py-3 bg-ink text-paper rounded-full text-sm font-medium hover:bg-gold transition-colors"
+            className="flex items-center justify-center gap-2 px-5 sm:px-6 py-3 bg-ink text-paper rounded-full text-sm font-medium hover:bg-gold transition-colors min-h-11"
           >
             <Plus size={18} />
             <span>Añadir Artista</span>
@@ -715,6 +755,7 @@ function GenrePage({ genre }: { genre: Genre }) {
         </div>
       </div>
 
+      {imageFeedback && <p role="status" className="text-sm text-ink/60">{imageFeedback}</p>}
       <div className={cn(
         "grid gap-10",
         viewMode === 'grid' ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-1"
@@ -744,13 +785,14 @@ function GenrePage({ genre }: { genre: Genre }) {
 }
 
 function ArtistCard({ artist, viewMode = 'grid' }: { artist: Artist, viewMode?: 'grid' | 'list' }) {
+  const portrait = useArtistPortrait(artist.name, artist.imageUrl);
   if (viewMode === 'list') {
     return (
       <Link to={`/artist/${artist.id}`} className="group flex items-center gap-6 p-4 rounded-2xl hover:bg-ink/5 transition-colors">
         <div className="w-16 h-16 rounded-xl overflow-hidden bg-ink/5 flex-shrink-0">
-          {artist.imageUrl ? (
+          {portrait ? (
             <img 
-              src={artist.imageUrl} 
+              src={portrait} 
               alt={artist.name} 
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
@@ -773,9 +815,9 @@ function ArtistCard({ artist, viewMode = 'grid' }: { artist: Artist, viewMode?: 
   return (
     <Link to={`/artist/${artist.id}`} className="group block space-y-4">
       <div className="relative aspect-square rounded-2xl overflow-hidden bg-ink/5">
-        {artist.imageUrl ? (
+        {portrait ? (
           <img 
-            src={artist.imageUrl} 
+            src={portrait} 
             alt={artist.name} 
             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
             referrerPolicy="no-referrer"
@@ -807,6 +849,7 @@ function ArtistDetail() {
   const [isEditing, setIsEditing] = useState(false);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [showLoadingPopup, setShowLoadingPopup] = useState(false);
+  const portrait = useArtistPortrait(artist?.name || '', artist?.imageUrl);
   const navigate = useNavigate();
   const lastGenre = useRef<Genre | null>(null);
 
@@ -897,11 +940,11 @@ function ArtistDetail() {
   };
 
   return (
-    <div className="space-y-20 pb-20">
-      <section className="relative h-[60vh] flex items-end px-6 pb-12 overflow-hidden">
+    <div className="space-y-12 sm:space-y-20 pb-12 sm:pb-20">
+      <section className="relative min-h-[340px] h-[48vh] md:h-[60vh] flex items-end px-4 sm:px-6 pb-8 md:pb-12 overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img
-            src={artist.imageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=1920'}
+            src={portrait || '/Vinyl.jpg'}
             alt={artist.name}
             className="w-full h-full object-cover opacity-50 grayscale"
             referrerPolicy="no-referrer"
@@ -914,7 +957,7 @@ function ArtistDetail() {
             <span className="text-xs uppercase tracking-widest font-bold text-gold">
               {artist.genre}
             </span>
-            <h1 className="font-serif text-6xl md:text-8xl tracking-tight">
+            <h1 className="font-serif text-4xl sm:text-6xl md:text-8xl tracking-tight leading-tight break-words">
               {artist.name}
             </h1>
           </div>
@@ -931,7 +974,7 @@ function ArtistDetail() {
         </div>
       </section>
 
-      <section className="max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-3 gap-20">
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 lg:grid-cols-3 gap-10 lg:gap-20">
         <div className="lg:col-span-2 space-y-12">
           {artist.biography && (
             <div className="space-y-6">
@@ -987,7 +1030,7 @@ function ArtistDetail() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
               {albums.map((album) => (
                 <div key={album.id}>
                   <AlbumCard album={album} />
@@ -1007,7 +1050,7 @@ function ArtistDetail() {
               <h2 className="text-xs uppercase tracking-widest font-bold text-gold">
                 Colaboraciones (Sideman)
               </h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
                 {sidemanAlbums.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} />
@@ -1025,7 +1068,7 @@ function ArtistDetail() {
               <p className="text-sm text-ink/50 -mt-4">
                 Estos discos incluyen grabaciones de varios artistas. Las grabaciones de {artist?.name} están destacadas en dorado.
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-8">
                 {sharedAlbums.map((album) => (
                   <div key={album.id}>
                     <AlbumCard album={album} highlightArtistId={id} />
@@ -1113,7 +1156,7 @@ function ArtistDetail() {
 
           <div className="aspect-[3/4] rounded-3xl overflow-hidden shadow-xl">
             <img
-              src={artist.imageUrl || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=1000'}
+              src={portrait || '/Vinyl.jpg'}
               alt={artist.name}
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
@@ -1190,7 +1233,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
     return (
       <div 
         onClick={() => setIsViewing(true)}
-        className="group flex items-center gap-6 p-4 rounded-2xl hover:bg-ink/5 transition-colors cursor-pointer"
+        className="group flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-6 p-3 sm:p-4 rounded-2xl hover:bg-ink/5 transition-colors cursor-pointer"
       >
         <div className="w-16 h-16 rounded-xl overflow-hidden bg-ink/5 flex-shrink-0 shadow-sm">
           {album.imageUrl ? (
@@ -1212,7 +1255,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
             {artistName}{album.releaseYear && ` • ${album.releaseYear}`}{album.label && ` • ${album.label}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end sm:justify-start">
           <CollectionButton albumId={album.id} status="owned" currentStatus={status} />
           <CollectionButton albumId={album.id} status="wishlist" currentStatus={status} />
           <button 
@@ -1269,7 +1312,7 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
           </div>
         )}
         
-        <div className="absolute top-2 right-2 flex flex-col gap-2 translate-x-12 group-hover:translate-x-0 transition-transform duration-300">
+        <div className="album-card-actions absolute top-2 right-2 flex flex-col gap-2 md:translate-x-12 md:group-hover:translate-x-0 transition-transform duration-300">
           <CollectionButton albumId={album.id} status="owned" currentStatus={status} />
           <CollectionButton albumId={album.id} status="wishlist" currentStatus={status} />
           <button 
@@ -1293,8 +1336,8 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
         )}
       </div>
       <div className="space-y-1 cursor-pointer" onClick={() => setIsViewing(true)}>
-        <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors">{album.title}</h4>
-        <div className="flex justify-between items-center">
+        <h4 className="font-serif text-lg leading-tight group-hover:text-gold transition-colors break-words">{album.title}</h4>
+        <div className="flex flex-wrap gap-x-2 gap-y-1 justify-between items-center">
           <p className="text-[10px] uppercase tracking-widest text-ink/60 font-bold truncate flex-1 mr-2">{artistName}</p>
           <p className="text-[10px] uppercase tracking-widest text-ink/40 font-bold whitespace-nowrap">
             {[album.releaseYear, album.label].filter(Boolean).join(' • ')}
@@ -1327,11 +1370,13 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
 }
 
 function CollectionButton({ albumId, status, currentStatus }: { albumId: string, status: 'owned' | 'wishlist', currentStatus: string | null }) {
+  const { isAdmin } = useAuth();
   const isActive = currentStatus === status;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (!isAdmin) return;
     
     try {
       const collectionRef = collection(db, 'collection');
@@ -1362,6 +1407,8 @@ function CollectionButton({ albumId, status, currentStatus }: { albumId: string,
   return (
     <button 
       onClick={handleClick}
+      disabled={!isAdmin}
+      aria-label={!isAdmin ? 'Solo el administrador puede modificar la colección' : undefined}
       className={cn(
         "w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-sm",
         isActive ? "bg-gold text-white" : "bg-paper/90 backdrop-blur-sm text-ink hover:text-gold"
@@ -1621,10 +1668,10 @@ function SearchPage() {
     });
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-16 md:py-20 space-y-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 md:py-20 space-y-8 sm:space-y-10">
       <div className="space-y-4">
         <span className="text-xs uppercase tracking-widest font-bold text-gold">Búsqueda avanzada</span>
-        <h1 className="font-serif text-5xl md:text-7xl leading-tight">Buscar grabaciones</h1>
+        <h1 className="font-serif text-4xl sm:text-5xl md:text-7xl leading-tight">Buscar grabaciones</h1>
         <p className="text-ink/65 max-w-3xl leading-relaxed">
           Localiza registros por artista, título, sello, número de catálogo, año, personal artístico y otros metadatos presentes en tu catálogo.
         </p>
@@ -1681,7 +1728,7 @@ function SearchPage() {
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-8">
           {filteredAlbums.map((album) => (
-            <AlbumCard key={album.id} album={album} viewMode="grid" />
+            <div key={album.id}><AlbumCard album={album} viewMode="grid" /></div>
           ))}
         </div>
       ) : (
@@ -1812,107 +1859,105 @@ function ImportWordPage() {
 
   const handleApproveAndSave = async () => {
     if (!selectedFile || !parsedData) return;
+    const composerName = parsedData.composer?.name?.trim();
+    if (!composerName) {
+      setMessage('No se encontró el nombre del compositor. Revisa el archivo antes de aprobarlo.');
+      return;
+    }
 
     setIsApproving(true);
     setMessage('');
 
     try {
-      // The server returns { composer, recordings, albums }
-      // We use composer for artist data, and recordings as the source of album entries
-      const composerData = parsedData.composer;
-      const recordingsData = parsedData.recordings || [];
-      let artistId = '';
+      const importGenre: Genre = importGenreSelection;
+      const artistId = slugifyArtistId(composerName);
+      if (!artistId) throw new Error('El nombre del compositor no produce un identificador válido.');
 
-      if (composerData?.name) {
-        artistId = slugifyArtistId(composerData.name);
-        await setDoc(
-          doc(db, 'artists', artistId),
-          {
-            id: artistId,
-            name: composerData.name,
-            biography: composerData.biography || '',
-            genre: importGenre,
-            birthDate: composerData.birthDate || '',
-            birthPlace: composerData.birthPlace || '',
-            deathDate: composerData.deathDate || '',
-            deathPlace: composerData.deathPlace || '',
-            imageUrl: '',
-            instruments: [],
-            periods: [],
-          },
-          { merge: true }
-        );
+      const composer = parsedData.composer!;
+      await setDoc(doc(db, 'artists', artistId), {
+        name: composerName,
+        genre: importGenre,
+        biography: composer.biography || '',
+        birthDate: composer.birthDate || '',
+        birthPlace: composer.birthPlace || '',
+        deathDate: composer.deathDate || '',
+        deathPlace: composer.deathPlace || '',
+      }, { merge: true });
+
+      const groups = new Map<string, { title: string; recordings: ServerRecording[]; edition: ServerRecording }>();
+      for (const rec of parsedData.recordings || []) {
+        const title = (rec.albumTitle || rec.workTitle || '').trim();
+        if (!title) continue;
+
+        // Different catalog numbers, labels and editions must remain separate releases.
+        const key = [artistId, title, rec.catalogNumber || '', rec.label || '', rec.editionYear || '']
+          .map(value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase())
+          .join('|');
+        const group = groups.get(key);
+        if (group) group.recordings.push(rec);
+        else groups.set(key, { title, recordings: [rec], edition: rec });
       }
 
-      // Convert each recording entry into an album document
-      const importGenre: Genre = importGenreSelection;
-      const skippedAlbums: string[] = [];
-      const savedAlbums: string[] = [];
-
-      for (const rec of recordingsData) {
-        const finalArtistName = composerData?.name || 'unknown_artist';
-        const finalTitle = rec.albumTitle || rec.workTitle || 'Untitled import';
-
+      let savedCount = 0;
+      let skippedCount = 0;
+      for (const { title, recordings, edition } of groups.values()) {
         const albumId = slugifyAlbumId(
-          finalArtistName,
-          finalTitle,
-          rec.editionYear,
-          rec.catalogNumber
+          composerName,
+          title,
+          edition.editionYear || '',
+          [edition.label, edition.catalogNumber].filter(Boolean).join('-')
         );
-
-        // Check if this album already exists in Firebase
-        const existingDoc = await getDoc(doc(db, 'albums', albumId));
-        if (existingDoc.exists()) {
-          skippedAlbums.push(finalTitle);
+        if (!albumId) continue;
+        if ((await getDoc(doc(db, 'albums', albumId))).exists()) {
+          skippedCount++;
           continue;
         }
 
-        // Also check by title+artistId to catch albums created with addDoc (auto-ID)
-        const duplicateQuery = query(
-          collection(db, 'albums'),
-          where('artistId', '==', artistId),
-          where('title', '==', finalTitle)
-        );
-        const duplicateSnapshot = await getDocs(duplicateQuery);
-        if (!duplicateSnapshot.empty) {
-          skippedAlbums.push(finalTitle);
-          continue;
-        }
-
-        savedAlbums.push(finalTitle);
-
-        await setDoc(
-          doc(db, 'albums', albumId),
-          {
-            id: albumId,
-            artistId: artistId,
-            artistName: finalArtistName,
-            title: finalTitle,
-            genre: importGenre,
-            releaseYear: rec.editionYear || '',
-            recordingDates: rec.recordingDate || '',
-            location: rec.recordingLocation || '',
-            label: rec.label || '',
-            catalogNumber: rec.catalogNumber || '',
-            formats: rec.format ? [rec.format] : [],
+        const works: Work[] = recordings.map((rec, index) => ({
+          title: rec.workTitle?.trim() || title,
+          compositionDate: rec.compositionDate || '',
+          orchestra: rec.orchestra || '',
+          conductor: rec.conductor || '',
+          soloists: (rec.soloists || []).map(name => ({ name, instrument: '' })),
+          movements: [{
+            trackNumber: index + 1,
+            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || title,
+            duration: '',
+            notes: [rec.opus, rec.premiereDate, rec.notes].filter(Boolean).join(' · '),
             orchestra: rec.orchestra || '',
-            conductor: rec.conductor || '',
-            soloists: (rec.soloists || []).map((s: string) => ({ name: s, instrument: '' })),
-            compositionDate: rec.compositionDate || '',
-            country: rec.country || '',
-            musicians: (rec.performers || []).map((p: string) => ({ name: p, instrument: '' })),
-            tracks: [],
-            discs: [],
-            anecdotes: rec.notes || '',
-            imageUrl: '',
-            availability: '',
-          },
-          { merge: true }
-        );
+            conductor: rec.conductor || ''
+          }]
+        }));
+
+        const validFormats = ['CD', 'Vinilo', 'DVD', 'Bluray'] as const;
+        const format = validFormats.find(value => value.toLowerCase() === (edition.format || '').trim().toLowerCase());
+        await setDoc(doc(db, 'albums', albumId), {
+          artistId,
+          artistName: composerName,
+          title,
+          genre: importGenre,
+          releaseYear: edition.editionYear || '',
+          recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
+          location: edition.recordingLocation || '',
+          label: edition.label || '',
+          catalogNumber: edition.catalogNumber || '',
+          formats: format ? [format] : [],
+          orchestra: edition.orchestra || '',
+          conductor: edition.conductor || '',
+          country: edition.country || '',
+          musicians: recordings.flatMap(rec => (rec.performers || []).map(name => ({ name, instrument: '' }))),
+          discs: importGenre === 'classical' ? [{ discNumber: 1, works }] : [],
+          tracks: importGenre === 'jazz' ? recordings.map((rec, index) => ({
+            trackNumber: index + 1, title: rec.workTitle || title, duration: ''
+          })) : [],
+          discCount: 1,
+          anecdotes: recordings.map(rec => rec.notes).filter(Boolean).join('\n'),
+          imageUrl: '',
+        });
+        savedCount++;
       }
 
       const uploadedFile = await uploadWordFileToStorage(selectedFile);
-
       await addDoc(collection(db, 'import_jobs'), {
         fileName: selectedFile.name,
         createdAt: new Date().toISOString(),
@@ -1923,21 +1968,10 @@ function ImportWordPage() {
         storagePath: uploadedFile.storagePath,
         extractedData: parsedData,
       });
-
-      let resultMessage = '';
-      if (savedAlbums.length > 0) {
-        resultMessage += `✓ ${savedAlbums.length} grabación(es) guardada(s) en Firebase.`;
-      }
-      if (skippedAlbums.length > 0) {
-        resultMessage += `\n⚠ ${skippedAlbums.length} grabación(es) omitida(s) porque ya existían: ${skippedAlbums.join(', ')}.`;
-      }
-      if (savedAlbums.length === 0 && skippedAlbums.length === 0) {
-        resultMessage = 'No se encontraron grabaciones para guardar.';
-      }
-      setMessage(resultMessage);
+      setMessage(`✓ ${savedCount} álbum(es) guardado(s); ${skippedCount} edición(es) ya existían. ${groups.size === 0 ? 'No se encontraron grabaciones válidas.' : ''}`);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'artists/albums/import_jobs');
-      setMessage('No se pudieron guardar los datos aprobados en Firebase.');
+      setMessage('No se pudieron guardar todos los datos. Revisa los permisos y vuelve a comprobar los álbumes importados.');
     } finally {
       setIsApproving(false);
     }
@@ -1957,7 +1991,7 @@ function ImportWordPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-8">
-        <div className="rounded-3xl border border-ink/10 bg-white p-6 md:p-8 shadow-sm space-y-6">
+        <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-6">
           <div className="space-y-2">
             <h2 className="font-serif text-3xl">1. Seleccionar archivo</h2>
             <p className="text-sm text-ink/60 leading-relaxed">
@@ -1966,14 +2000,14 @@ function ImportWordPage() {
           </div>
 
           <label className="block rounded-2xl border border-dashed border-ink/20 bg-ink/[0.03] p-6 hover:border-gold/50 transition-colors">
-            <input type="file" accept=".doc,.docx" className="hidden" onChange={handleFileChange} />
+            <input type="file" accept=".docx" className="hidden" onChange={handleFileChange} />
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-ink text-paper flex items-center justify-center">
                 <Upload size={20} />
               </div>
               <div>
                 <p className="font-medium text-ink">{selectedFile ? selectedFile.name : 'Haz clic para elegir un archivo Word'}</p>
-                <p className="text-sm text-ink/50">Formato admitido: .doc y .docx</p>
+                <p className="text-sm text-ink/50">Formato admitido: .docx</p>
               </div>
             </div>
           </label>
@@ -2544,7 +2578,7 @@ function DiscogsImportPage() {
   };
 
   const saveApprovedImport = async () => {
-    const artistsToSave = Array.from(new Set(selectedArtistNames.map(normalizeArtistName).filter(Boolean)));
+    const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
 
     if (!mainArtistName || artistsToSave.length === 0 || !title.trim()) {
@@ -2642,10 +2676,10 @@ function DiscogsImportPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-16 space-y-10">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10 sm:py-16 space-y-8 sm:space-y-10">
       <div className="space-y-4">
         <span className="text-xs uppercase tracking-widest font-bold text-gold">Importación Discogs</span>
-        <h1 className="font-serif text-5xl md:text-6xl italic">Agregar álbum por catálogo o barcode</h1>
+        <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl italic leading-tight break-words">Agregar álbum por catálogo o barcode</h1>
         <p className="text-ink/60 max-w-3xl leading-relaxed">
           Busca el release en Discogs, revisa todos los datos encontrados, edita lo que quieras y recién después aprueba el guardado final. Si el artista no existe, se crea primero; si ya existe, el álbum queda en su página.
         </p>
@@ -2667,7 +2701,7 @@ function DiscogsImportPage() {
       </div>
 
       {title && (
-        <div className="rounded-3xl border border-ink/10 bg-white p-6 md:p-8 shadow-sm space-y-8">
+        <div className="rounded-3xl border border-ink/10 bg-white p-4 sm:p-6 md:p-8 shadow-sm space-y-8">
           <div className="flex flex-col md:flex-row gap-8">
             <div className="w-full md:w-56 shrink-0 space-y-3">
               <div className="aspect-square rounded-3xl overflow-hidden bg-ink/5 shadow-md">
@@ -2841,7 +2875,7 @@ function CollectionPage() {
   const renderAlbumGrid = (sectionItems: (CollectionItem & { album: Album })[]) => (
     <div className={cn(
       "grid gap-8",
-      viewMode === 'grid' ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-1"
+      viewMode === 'grid' ? "grid-cols-1 min-[380px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-1"
     )}>
       {sectionItems.map(item => (
         <div key={item.id}>
@@ -2977,6 +3011,7 @@ function ArtistModal({ artist, genre, onClose }: { artist?: Artist, genre: Genre
   const [periods, setPeriods] = useState<string[]>(artist?.periods || []);
   const [autoGenerateDiscography, setAutoGenerateDiscography] = useState(false);
   const [fetchingMetadata, setFetchingMetadata] = useState(false);
+  const [findingPortrait, setFindingPortrait] = useState(false);
   const [allArtists, setAllArtists] = useState<Artist[]>([]);
   const [resolving, setResolving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -3040,134 +3075,6 @@ try {
 }
 };
 
-const handleFetchFromDiscogs = async () => {
-  if (!catalogNumber.trim()) {
-    alert("Introduce un número de catálogo primero.");
-    return;
-  }
-
-  setIsFetchingDiscogs(true);
-
-  try {
-    const response = await fetch(
-      `/api/discogs-search-by-catalog?catno=${encodeURIComponent(catalogNumber)}`
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data?.error || "No se pudo buscar en Discogs.");
-    }
-
-    if (data.title) setTitle(data.title);
-    if (data.artist) setArtistName(data.artist);
-    if (data.year) {
-      const yearText = String(data.year);
-      setReleaseYear(yearText);
-      setEditionDate((current) => current || yearText);
-    }
-    if (data.country) setCountry(data.country);
-    if (data.label) {
-      setLabel(data.label);
-      setOriginalLabel((current) => current || data.label);
-    }
-    if (data.catno) {
-      setCatalogNumber(data.catno);
-      setEditionCatalogNumber((current) => current || data.catno);
-    }
-
-    if (data.originalLabel) setOriginalLabel(data.originalLabel);
-    if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
-    if (data.originalYear) setOriginalYear(String(data.originalYear));
-    if (data.recordingDate) setRecordingDates(data.recordingDate);
-    if (data.recordingLocation) setLocation(data.recordingLocation);
-    if (data.orchestra) setOrchestra(data.orchestra);
-    if (data.conductor) setConductor(data.conductor);
-    if (data.producer) setProducer(data.producer);
-    if (data.engineer) setEngineer(data.engineer);
-    if (data.masteringEngineer) setMasteringEngineer(data.masteringEngineer);
-    if (data.compositionDate) setCompositionDate(data.compositionDate);
-    if (data.compositionPlace) setCompositionPlace(data.compositionPlace);
-
-    if (typeof data.discCount === "number" && data.discCount > 0) {
-      setDiscCount(data.discCount);
-    }
-
-    if (data.format) {
-      const normalizedFormats = String(data.format)
-        .split(",")
-        .map((item: string) => item.trim())
-        .filter(Boolean)
-        .map((item: string) => {
-          const lower = item.toLowerCase();
-          if (lower.includes("cd")) return "CD";
-          if (lower.includes("vinyl") || lower.includes("lp")) return "Vinilo";
-          if (lower.includes("dvd")) return "DVD";
-          if (lower.includes("blu-ray") || lower.includes("bluray")) return "Bluray";
-          return null;
-        })
-        .filter(Boolean) as ("CD" | "Vinilo" | "DVD" | "Bluray")[];
-
-      if (normalizedFormats.length) {
-        setFormats([...new Set(normalizedFormats)]);
-      }
-    }
-
-    if (data.coverImage || data.thumb) {
-      setImageUrl(data.coverImage || data.thumb);
-    }
-
-    if (data.discogsUrl) {
-      setDiscogsUrl(data.discogsUrl);
-    }
-
-    if (genre === "classical") {
-      if (Array.isArray(data.discs) && data.discs.length > 0) {
-        setDiscs(data.discs);
-      } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-        setDiscs([
-          {
-            discNumber: 1,
-            works: [
-              {
-                title: "Tracklist",
-                movements: data.rawTracklist
-                  .filter((item: any) => item?.title && item?.type_ !== "heading")
-                  .map((item: any, index: number) => ({
-                    trackNumber: index + 1,
-                    title: item.title,
-                    duration: item.duration || "",
-                  })),
-              },
-            ],
-          },
-        ]);
-      }
-    } else {
-      if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-        setTracks(data.tracks);
-      } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-        setTracks(
-          data.rawTracklist
-            .filter((item: any) => item?.title && item?.type_ !== "heading")
-            .map((item: any, index: number) => ({
-              trackNumber: index + 1,
-              title: item.title,
-              duration: item.duration || "",
-            }))
-        );
-      }
-    }
-
-    alert("Datos cargados desde Discogs.");
-  } catch (error: any) {
-    console.error("Discogs fetch error:", error);
-    alert(error.message || "No se pudo obtener información desde Discogs.");
-  } finally {
-    setIsFetchingDiscogs(false);
-  }
-};
-
   const resolveImage = async () => {
     if (!imageUrl || imageUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i)) return;
     setResolving(true);
@@ -3194,6 +3101,18 @@ const handleFetchFromDiscogs = async () => {
     });
     return unsubscribe;
   }, []);
+
+  const handleFindPortrait = async () => {
+    if (!name.trim() || imageUrl.trim()) return;
+    setFindingPortrait(true);
+    try {
+      const portrait = await findArtistPortrait(name);
+      if (portrait) setImageUrl(portrait);
+      else alert('No se encontró una imagen verificada. Puedes subir una foto manualmente.');
+    } finally {
+      setFindingPortrait(false);
+    }
+  };
 
   const handleFetchMetadata = async () => {
     if (!name.trim()) return;
@@ -3239,90 +3158,6 @@ const handleFetchFromDiscogs = async () => {
       setFetchingMetadata(false);
     }
   };
-  const buildAlbumDataForArtist = (targetArtistId: string, targetArtistName: string) => ({
-    title,
-    releaseYear,
-    imageUrl,
-    artistId: targetArtistId,
-    genre,
-    sidemenIds,
-    artistName: targetArtistName,
-    recordingDates,
-    releaseDate,
-    location,
-    label,
-    catalogNumber,
-    originalCatalogNumber,
-    editionCatalogNumber,
-    editionDate,
-    country,
-    originalLabel,
-    originalYear,
-    foundationDate,
-    foundationPlace,
-    founderName,
-    choirMaster,
-    engineer,
-    masteringEngineer,
-    producer,
-    discCount,
-    formats,
-    orchestra,
-    conductor,
-    compositionDate,
-    compositionPlace,
-    musicians,
-    tracks,
-    discs,
-    anecdotes,
-  });
-
-  const approveCurrentComposer = async () => {
-    if (!composerData?.name) return;
-
-    setSaving(true);
-
-    try {
-      const existingArtist = await getArtistByName(composerData.name);
-      const targetArtistId = existingArtist?.id || slugifyArtistId(composerData.name);
-
-      if (!existingArtist) {
-        await saveArtistData(targetArtistId, {
-          id: targetArtistId,
-          name: composerData.name,
-          genre: 'classical',
-          biography: composerData.biography || '',
-          biographySections: composerData.biographySections || [],
-          imageUrl: composerData.imageUrl || '',
-          birthDate: composerData.birthDate || '',
-          birthPlace: composerData.birthPlace || '',
-          deathDate: composerData.deathDate || '',
-          deathPlace: composerData.deathPlace || '',
-          instruments: composerData.instruments || [],
-          periods: composerData.periods || [],
-        });
-      }
-
-      await addDoc(collection(db, 'albums'), buildAlbumDataForArtist(targetArtistId, composerData.name));
-
-      if (currentComposerIndex < pendingComposers.length - 1) {
-        setCurrentComposerIndex(currentComposerIndex + 1);
-        setComposerData(null);
-      } else {
-        setPendingComposers([]);
-        setComposerData(null);
-        setCurrentComposerIndex(0);
-        alert('Álbum guardado para todos los compositores aprobados.');
-      }
-    } catch (error) {
-      const errInfo = handleFirestoreError(error, OperationType.CREATE, 'artists/albums');
-      console.error('Composer album approval failed:', errInfo);
-      alert('No se pudo guardar este compositor/álbum. Revisa la consola.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -3382,7 +3217,7 @@ const handleFetchFromDiscogs = async () => {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -3394,14 +3229,14 @@ const handleFetchFromDiscogs = async () => {
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-2xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-y-auto"
+        className="mobile-dialog relative w-full max-w-2xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto"
       >
-        <div className="px-8 py-6 border-b border-ink/10 flex items-center justify-between">
+        <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-ink/10 flex items-center justify-between gap-3">
           <h2 className="font-serif text-3xl italic">{artist ? 'Editar Artista' : 'Nuevo Artista'}</h2>
           <button onClick={onClose} className="text-ink/40 hover:text-ink transition-colors"><X size={24} /></button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-8 space-y-6">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-8 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -3808,7 +3643,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
   }, [album.artistId, artistName]);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -3820,11 +3655,12 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-5xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
+        className="mobile-dialog album-detail-dialog relative w-full max-w-5xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-y-auto md:overflow-hidden flex flex-col md:flex-row"
       >
+        <button type="button" onClick={onClose} aria-label="Cerrar detalles del álbum" className="md:hidden sticky top-3 self-end mr-3 -mb-12 z-30 w-11 h-11 flex items-center justify-center bg-paper/95 rounded-full shadow-md text-ink"><X size={22} /></button>
         {/* Left Side: Cover & Basic Info */}
-        <div className="w-full md:w-2/5 bg-ink/5 p-8 flex flex-col gap-8 overflow-y-auto border-r border-ink/10 shrink-0">
-          <div className="aspect-square rounded-2xl overflow-hidden shadow-2xl bg-ink/10">
+        <div className="w-full md:w-2/5 bg-ink/5 p-4 sm:p-8 flex flex-col gap-4 md:gap-8 md:overflow-y-auto border-b md:border-b-0 md:border-r border-ink/10 shrink-0">
+          <div className="w-40 sm:w-full max-w-full aspect-square rounded-2xl overflow-hidden shadow-lg sm:shadow-2xl bg-ink/10 mx-auto">
             {album.imageUrl ? (
               <img src={album.imageUrl} alt={album.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             ) : (
@@ -3836,7 +3672,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
           
           <div className="space-y-4">
             <div className="space-y-1">
-              <h2 className="font-serif text-4xl leading-tight">{album.title}</h2>
+              <h2 className="font-serif text-3xl sm:text-4xl leading-tight break-words">{album.title}</h2>
               <p className="text-gold font-bold uppercase tracking-widest text-sm">{artistName}</p>
             </div>
             
@@ -3959,7 +3795,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
         </div>
 
         {/* Right Side: Details, Musicians, Tracks */}
-        <div className="flex-1 overflow-y-auto p-10 space-y-12">
+        <div className="flex-1 min-w-0 md:overflow-y-auto p-4 sm:p-8 lg:p-10 space-y-8 md:space-y-12">
           {/* Technical Details */}
           <div className="space-y-6">
             <div className="flex items-center gap-2 text-gold">
@@ -4589,6 +4425,90 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     return unsubscribe;
   }, []);
 
+  const buildAlbumDataForArtist = (targetArtistId: string, targetArtistName: string) => ({
+    title,
+    releaseYear,
+    imageUrl,
+    artistId: targetArtistId,
+    genre,
+    sidemenIds,
+    artistName: targetArtistName,
+    recordingDates,
+    releaseDate,
+    location,
+    label,
+    catalogNumber,
+    originalCatalogNumber,
+    editionCatalogNumber,
+    editionDate,
+    country,
+    originalLabel,
+    originalYear,
+    foundationDate,
+    foundationPlace,
+    founderName,
+    choirMaster,
+    engineer,
+    masteringEngineer,
+    producer,
+    discCount,
+    formats,
+    orchestra,
+    conductor,
+    compositionDate,
+    compositionPlace,
+    musicians,
+    tracks,
+    discs,
+    anecdotes,
+  });
+
+  const approveCurrentComposer = async () => {
+    if (!composerData?.name) return;
+
+    setSaving(true);
+
+    try {
+      const existingArtist = await getArtistByName(composerData.name);
+      const targetArtistId = existingArtist?.id || slugifyArtistId(composerData.name);
+
+      if (!existingArtist) {
+        await saveArtistData(targetArtistId, {
+          id: targetArtistId,
+          name: composerData.name,
+          genre: 'classical',
+          biography: composerData.biography || '',
+          biographySections: composerData.biographySections || [],
+          imageUrl: composerData.imageUrl || '',
+          birthDate: composerData.birthDate || '',
+          birthPlace: composerData.birthPlace || '',
+          deathDate: composerData.deathDate || '',
+          deathPlace: composerData.deathPlace || '',
+          instruments: composerData.instruments || [],
+          periods: composerData.periods || [],
+        });
+      }
+
+      await addDoc(collection(db, 'albums'), buildAlbumDataForArtist(targetArtistId, composerData.name));
+
+      if (currentComposerIndex < pendingComposers.length - 1) {
+        setCurrentComposerIndex(currentComposerIndex + 1);
+        setComposerData(null);
+      } else {
+        setPendingComposers([]);
+        setComposerData(null);
+        setCurrentComposerIndex(0);
+        alert('Álbum guardado para todos los compositores aprobados.');
+      }
+    } catch (error) {
+      const errInfo = handleFirestoreError(error, OperationType.CREATE, 'artists/albums');
+      console.error('Composer album approval failed:', errInfo);
+      alert('No se pudo guardar este compositor/álbum. Revisa la consola.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -4674,7 +4594,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-6">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -4686,15 +4606,15 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative w-full max-w-3xl max-h-[90vh] bg-paper rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+        className="mobile-dialog relative w-full max-w-3xl h-[100dvh] sm:h-auto sm:max-h-[90vh] bg-paper rounded-none sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"
       >
-        <form onSubmit={handleSubmit} className="flex flex-col h-full overflow-hidden">
-          <div className="px-8 py-6 border-b border-ink/10 flex items-center justify-between bg-paper shrink-0">
+        <form onSubmit={handleSubmit} className="classical-editor flex flex-col h-full min-h-0 overflow-hidden">
+          <div className="px-4 sm:px-8 py-4 sm:py-6 border-b border-ink/10 flex items-center justify-between gap-3 bg-paper shrink-0">
             <h2 className="font-serif text-3xl italic">{album ? 'Editar Álbum' : 'Nuevo Álbum'}</h2>
             <button type="button" onClick={onClose} className="text-ink/40 hover:text-ink transition-colors"><X size={24} /></button>
           </div>
 
-          <div className="flex-grow overflow-y-auto p-8 space-y-10">
+          <div className="flex-grow min-h-0 overflow-y-auto p-4 sm:p-8 space-y-8 sm:space-y-10">
             {pendingComposers.length > 0 && (
               <div className="rounded-3xl border border-gold/30 bg-white p-6 space-y-4 shadow-sm">
                 <h3 className="font-serif text-2xl italic">
@@ -4953,16 +4873,16 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
               {genre === 'classical' ? (
                 <div className="space-y-8">
                   {discs.map((disc, dIdx) => (
-                    <div key={dIdx} className="p-6 bg-ink/5 rounded-3xl border border-ink/10 space-y-6 relative">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
+                    <div key={dIdx} className="p-3 sm:p-6 bg-ink/5 rounded-2xl sm:rounded-3xl border border-ink/10 space-y-6 relative">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex flex-col min-[430px]:flex-row min-w-0 gap-3 sm:gap-4">
                           <div className="flex items-center gap-2">
                             <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Disco</label>
                             <input 
                               type="number"
                               value={disc.discNumber}
                               onChange={(e) => {
-                                const newDiscs = [...discs];
+                                const newDiscs = structuredClone(discs);
                                 newDiscs[dIdx].discNumber = parseInt(e.target.value);
                                 setDiscs(newDiscs);
                               }}
@@ -4972,11 +4892,11 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                           <input 
                             value={disc.title || ''}
                             onChange={(e) => {
-                              const newDiscs = [...discs];
+                              const newDiscs = structuredClone(discs);
                               newDiscs[dIdx].title = e.target.value;
                               setDiscs(newDiscs);
                             }}
-                            className="bg-paper border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-gold"
+                            className="min-w-0 w-full sm:w-auto bg-paper border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-gold"
                             placeholder="Título del Disco (opcional)"
                           />
                         </div>
@@ -4984,7 +4904,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                           <button 
                             type="button"
                             onClick={() => {
-                              const newDiscs = [...discs];
+                              const newDiscs = structuredClone(discs);
                               newDiscs[dIdx].works.push({ title: '', movements: [] });
                               setDiscs(newDiscs);
                             }}
@@ -5009,7 +4929,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                             <button 
                               type="button"
                               onClick={() => {
-                                const newDiscs = [...discs];
+                                const newDiscs = structuredClone(discs);
                                 newDiscs[dIdx].works = newDiscs[dIdx].works.filter((_, i) => i !== wIdx);
                                 setDiscs(newDiscs);
                               }}
@@ -5024,7 +4944,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.title}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].title = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5040,7 +4960,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.orchestra || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].orchestra = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5052,7 +4972,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.conductor || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].conductor = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5067,7 +4987,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.compositionPlace || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].compositionPlace = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5079,7 +4999,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.compositionDate || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].compositionDate = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5094,7 +5014,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.founderName || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].founderName = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5106,7 +5026,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.choirMaster || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].choirMaster = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5121,7 +5041,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.foundationPlace || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].foundationPlace = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5133,7 +5053,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <input 
                                   value={work.foundationDate || ''}
                                   onChange={(e) => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     newDiscs[dIdx].works[wIdx].foundationDate = e.target.value;
                                     setDiscs(newDiscs);
                                   }}
@@ -5148,7 +5068,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <button 
                                   type="button"
                                   onClick={() => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     if (!newDiscs[dIdx].works[wIdx].soloists) newDiscs[dIdx].works[wIdx].soloists = [];
                                     newDiscs[dIdx].works[wIdx].soloists!.push({ name: '', instrument: '', birthDate: '', birthPlace: '', deathDate: '', deathPlace: '' });
                                     setDiscs(newDiscs);
@@ -5165,7 +5085,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                     <button 
                                       type="button"
                                       onClick={() => {
-                                        const newDiscs = [...discs];
+                                        const newDiscs = structuredClone(discs);
                                         newDiscs[dIdx].works[wIdx].soloists = newDiscs[dIdx].works[wIdx].soloists!.filter((_, i) => i !== sIdx);
                                         setDiscs(newDiscs);
                                       }}
@@ -5177,7 +5097,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.name}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].name = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5187,7 +5107,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.instrument}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].instrument = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5199,7 +5119,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.birthDate || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].birthDate = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5209,7 +5129,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.birthPlace || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].birthPlace = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5221,7 +5141,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.deathDate || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].deathDate = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5231,7 +5151,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={s.deathPlace || ''}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].soloists![sIdx].deathPlace = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5250,7 +5170,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                 <button 
                                   type="button"
                                   onClick={() => {
-                                    const newDiscs = [...discs];
+                                    const newDiscs = structuredClone(discs);
                                     const trackNum = newDiscs[dIdx].works[wIdx].movements.length + 1;
                                     newDiscs[dIdx].works[wIdx].movements.push({ trackNumber: trackNum, title: '', duration: '' });
                                     setDiscs(newDiscs);
@@ -5270,7 +5190,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                         <select 
                                           value={mov.side || 'A'}
                                           onChange={(e) => {
-                                            const newDiscs = [...discs];
+                                            const newDiscs = structuredClone(discs);
                                             newDiscs[dIdx].works[wIdx].movements[mIdx].side = e.target.value as 'A' | 'B';
                                             setDiscs(newDiscs);
                                           }}
@@ -5283,7 +5203,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={mov.title}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements[mIdx].title = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5293,7 +5213,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <input 
                                         value={mov.duration}
                                         onChange={(e) => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements[mIdx].duration = e.target.value;
                                           setDiscs(newDiscs);
                                         }}
@@ -5303,7 +5223,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                       <button 
                                         type="button"
                                         onClick={() => {
-                                          const newDiscs = [...discs];
+                                          const newDiscs = structuredClone(discs);
                                           newDiscs[dIdx].works[wIdx].movements = newDiscs[dIdx].works[wIdx].movements.filter((_, i) => i !== mIdx);
                                           setDiscs(newDiscs);
                                         }}
@@ -5321,7 +5241,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.orchestra || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].orchestra = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5333,7 +5253,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.conductor || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].conductor = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5348,7 +5268,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.compositionPlace || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].compositionPlace = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5360,7 +5280,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.compositionDate || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].compositionDate = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5375,7 +5295,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.founderName || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].founderName = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5387,7 +5307,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.choirMaster || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].choirMaster = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5402,7 +5322,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.foundationPlace || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].foundationPlace = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5414,7 +5334,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <input 
                                             value={mov.foundationDate || ''}
                                             onChange={(e) => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].foundationDate = e.target.value;
                                               setDiscs(newDiscs);
                                             }}
@@ -5429,7 +5349,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                           <button 
                                             type="button"
                                             onClick={() => {
-                                              const newDiscs = [...discs];
+                                              const newDiscs = structuredClone(discs);
                                               if (!newDiscs[dIdx].works[wIdx].movements[mIdx].soloists) newDiscs[dIdx].works[wIdx].movements[mIdx].soloists = [];
                                               newDiscs[dIdx].works[wIdx].movements[mIdx].soloists!.push({ name: '', instrument: '', birthDate: '', birthPlace: '', deathDate: '', deathPlace: '' });
                                               setDiscs(newDiscs);
@@ -5446,7 +5366,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                               <button 
                                                 type="button"
                                                 onClick={() => {
-                                                  const newDiscs = [...discs];
+                                                  const newDiscs = structuredClone(discs);
                                                   newDiscs[dIdx].works[wIdx].movements[mIdx].soloists = newDiscs[dIdx].works[wIdx].movements[mIdx].soloists!.filter((_, i) => i !== sIdx);
                                                   setDiscs(newDiscs);
                                                 }}
@@ -5458,7 +5378,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.name}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].name = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5468,7 +5388,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.instrument}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].instrument = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5480,7 +5400,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.birthDate || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].birthDate = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5490,7 +5410,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.birthPlace || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].birthPlace = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5502,7 +5422,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.deathDate || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].deathDate = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5512,7 +5432,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                                                 <input 
                                                   value={s.deathPlace || ''}
                                                   onChange={(e) => {
-                                                    const newDiscs = [...discs];
+                                                    const newDiscs = structuredClone(discs);
                                                     newDiscs[dIdx].works[wIdx].movements[mIdx].soloists![sIdx].deathPlace = e.target.value;
                                                     setDiscs(newDiscs);
                                                   }}
@@ -5848,7 +5768,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
             </div>
           </div>
 
-          <div className="sticky bottom-0 bg-paper px-8 py-6 border-t border-ink/10 flex items-center justify-between shrink-0">
+          <div className="mobile-dialog-footer sticky bottom-0 bg-paper px-4 sm:px-8 py-3 sm:py-6 border-t border-ink/10 flex flex-wrap items-center justify-between gap-3 shrink-0">
             {album && (
               <div className="flex items-center gap-4">
                 {isConfirmingDelete ? (
@@ -5986,7 +5906,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  const isAdmin = user?.email === "debbiebli262@gmail.com";
+  const isAdmin = user?.email === "debbiebli262@gmail.com" && user.emailVerified;
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
@@ -6038,89 +5958,14 @@ function MainLayout() {
         </Routes>
       </main>
       <Footer />
-      <SeedButton />
-      <CleanupButton />
+      {/* Seed data is never injected into a live collection automatically. */}
+      {/* Destructive duplicate cleanup is intentionally disabled. Editions may share titles. */}
     </div>
   );
 }
 
 
 export default function App() {
-  useEffect(() => {
-    const migrateArtistDocumentIds = async () => {
-      try {
-        const artistsSnapshot = await getDocs(collection(db, 'artists'));
-        const artists = artistsSnapshot.docs.map((artistDoc) => ({ id: artistDoc.id, ...artistDoc.data() } as Artist));
-
-        for (const artist of artists) {
-          const desiredId = slugifyArtistId(artist.name || '');
-          if (!desiredId || artist.id === desiredId) continue;
-
-          const targetRef = doc(db, 'artists', desiredId);
-          const targetSnap = await getDoc(targetRef);
-
-          if (!targetSnap.exists()) {
-            const { id, ...artistData } = artist;
-            await setDoc(targetRef, artistData, { merge: true });
-
-            const albumsSnapshot = await getDocs(query(collection(db, 'albums'), where('artistId', '==', artist.id)));
-            for (const albumDoc of albumsSnapshot.docs) {
-              await updateDoc(doc(db, 'albums', albumDoc.id), {
-                artistId: desiredId,
-                artistName: artist.name || albumDoc.data().artistName || ''
-              });
-            }
-
-            await deleteDoc(doc(db, 'artists', artist.id));
-          }
-        }
-      } catch (error) {
-        console.error('Artist ID migration failed:', error);
-      }
-    };
-
-    migrateArtistDocumentIds();
-
-    const autoCleanup = async () => {
-      try {
-        // Cleanup Artists
-        const artistsSnapshot = await getDocs(collection(db, 'artists'));
-        const artists = artistsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Artist));
-        const artistGroups: { [key: string]: string[] } = {};
-        artists.forEach(artist => {
-          const key = `${artist.name.toLowerCase().trim()}_${artist.genre}`;
-          if (!artistGroups[key]) artistGroups[key] = [];
-          artistGroups[key].push(artist.id);
-        });
-        for (const key in artistGroups) {
-          const ids = artistGroups[key];
-          if (ids.length > 1) {
-            for (let i = 1; i < ids.length; i++) await deleteDoc(doc(db, 'artists', ids[i]));
-          }
-        }
-
-        // Cleanup Albums
-        const albumsSnapshot = await getDocs(collection(db, 'albums'));
-        const albums = albumsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Album));
-        const albumGroups: { [key: string]: string[] } = {};
-        albums.forEach(album => {
-          const key = `${album.title.toLowerCase().trim()}_${album.artistId}`;
-          if (!albumGroups[key]) albumGroups[key] = [];
-          albumGroups[key].push(album.id);
-        });
-        for (const key in albumGroups) {
-          const ids = albumGroups[key];
-          if (ids.length > 1) {
-            for (let i = 1; i < ids.length; i++) await deleteDoc(doc(db, 'albums', ids[i]));
-          }
-        }
-      } catch (e) {
-        console.error('Auto-cleanup failed:', e);
-      }
-    };
-    autoCleanup();
-  }, []);
-
   return (
     <ErrorBoundary>
       <AuthProvider>
