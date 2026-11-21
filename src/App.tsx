@@ -2708,8 +2708,64 @@ function ImportWordPage() {
                   </div>
                 </div>
 
+                <section className="space-y-4">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <h3 className="font-serif text-2xl">Ediciones discográficas encontradas</h3>
+                      <p className="text-xs text-ink/50 mt-1">Se importará cada edición una sola vez. Discogs es opcional y sólo se aplican ediciones que elijas.</p>
+                    </div>
+                    <span className="text-xs rounded-full bg-gold/10 px-3 py-2 font-semibold text-gold">{albumsForImport.length} álbum(es)</span>
+                  </div>
+                  {enrichMessage && <p role="status" className="text-xs rounded-lg bg-ink/5 p-3 text-ink/70">{enrichMessage}</p>}
+                  {albumsForImport.map((candidate, index) => {
+                    const source = extractedCandidates[index];
+                    const key = normalizedEditionKey(source);
+                    const matches = discogsMatches[key] || [];
+                    const enriched = enrichedWordAlbums[key];
+                    return (
+                      <div key={key + '-' + index} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-3">
+                        <div className="flex gap-3 items-start">
+                          {enriched?.imageUrl ? <img src={enriched.imageUrl} alt={candidate.title} className="w-20 h-20 rounded-xl object-cover shrink-0" /> : <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center"><DiscIcon size={28} className="text-ink/20" /></div>}
+                          <div className="min-w-0 space-y-1 flex-1">
+                            <h4 className="font-serif text-xl break-words">{candidate.title || 'Título no identificado'}</h4>
+                            <p className="text-xs text-ink/60 break-words">{[candidate.label, candidate.catalogNumber, candidate.barcode && `EAN: ${candidate.barcode}`, candidate.format, candidate.editionYear].filter(Boolean).join(' · ') || 'Edición sin identificadores'}</p>
+                            {enriched?.discogsReleaseId && <p className="text-xs text-gold font-semibold">Discogs #{enriched.discogsReleaseId} · Verificado</p>}
+                          </div>
+                        </div>
+                        {(candidate.barcode || candidate.catalogNumber) && (
+                          <div className="space-y-2">
+                            <button type="button" disabled={Boolean(enrichingAlbum)} onClick={() => lookupWordAlbum(source)}
+                              className="rounded-full border border-ink/20 px-4 py-2 text-xs font-bold hover:bg-ink/5 disabled:opacity-40">
+                              {enrichingAlbum === key ? 'Buscando...' : 'Buscar edición en Discogs'}
+                            </button>
+                            {matches.length > 0 && (
+                              <div className="flex flex-col sm:flex-row gap-2">
+                                <select aria-label={`Seleccionar edición de ${candidate.title}`}
+                                  value={discogsSelection[key] || ''}
+                                  onChange={event => setDiscogsSelection(current => ({...current, [key]: event.target.value}))}
+                                  className="min-w-0 flex-1 rounded-xl bg-ink/5 px-3 py-3 text-sm">
+                                  <option value="">Elegir edición exacta...</option>
+                                  {matches.map(match => (
+                                    <option value={match.id} key={match.id}>
+                                      {match.title} · {match.year || 's/f'} · {match.catno} · {match.formats.join('/')} · #{match.id}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button type="button" disabled={Boolean(enrichingAlbum) || !discogsSelection[key]}
+                                  onClick={() => confirmWordDiscogsRelease(source)}
+                                  className="rounded-xl bg-ink text-paper px-4 py-3 text-xs font-semibold disabled:opacity-40">Aplicar edición</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!albumsForImport.length && <p className="text-sm text-ink/50 rounded-xl border border-dashed border-ink/20 p-4">No se detectaron ediciones discográficas. Puedes guardar la biografía; no se inventarán álbumes a partir de obras aisladas.</p>}
+                </section>
+
                 <div className="space-y-3">
-                  <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Álbumes / grabaciones</h3>
+                  <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Grabaciones y obras extraídas del documento</h3>
                   {(extractedAlbums as ServerRecording[]).length > 0 ? (
                     <div className="space-y-4">
                       {extractedAlbums.map((rec, index) => (
