@@ -1685,7 +1685,7 @@ function SearchPage() {
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-8">
           {filteredAlbums.map((album) => (
-            <AlbumCard key={album.id} album={album} viewMode="grid" />
+            <div key={album.id}><AlbumCard album={album} viewMode="grid" /></div>
           ))}
         </div>
       ) : (
@@ -2535,7 +2535,7 @@ function DiscogsImportPage() {
   };
 
   const saveApprovedImport = async () => {
-    const artistsToSave = Array.from(new Set(selectedArtistNames.map(normalizeArtistName).filter(Boolean)));
+    const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
 
     if (!mainArtistName || artistsToSave.length === 0 || !title.trim()) {
@@ -3031,134 +3031,6 @@ try {
 }
 };
 
-const handleFetchFromDiscogs = async () => {
-  if (!catalogNumber.trim()) {
-    alert("Introduce un número de catálogo primero.");
-    return;
-  }
-
-  setIsFetchingDiscogs(true);
-
-  try {
-    const response = await fetch(
-      `/api/discogs-search-by-catalog?catno=${encodeURIComponent(catalogNumber)}`
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data?.error || "No se pudo buscar en Discogs.");
-    }
-
-    if (data.title) setTitle(data.title);
-    if (data.artist) setArtistName(data.artist);
-    if (data.year) {
-      const yearText = String(data.year);
-      setReleaseYear(yearText);
-      setEditionDate((current) => current || yearText);
-    }
-    if (data.country) setCountry(data.country);
-    if (data.label) {
-      setLabel(data.label);
-      setOriginalLabel((current) => current || data.label);
-    }
-    if (data.catno) {
-      setCatalogNumber(data.catno);
-      setEditionCatalogNumber((current) => current || data.catno);
-    }
-
-    if (data.originalLabel) setOriginalLabel(data.originalLabel);
-    if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
-    if (data.originalYear) setOriginalYear(String(data.originalYear));
-    if (data.recordingDate) setRecordingDates(data.recordingDate);
-    if (data.recordingLocation) setLocation(data.recordingLocation);
-    if (data.orchestra) setOrchestra(data.orchestra);
-    if (data.conductor) setConductor(data.conductor);
-    if (data.producer) setProducer(data.producer);
-    if (data.engineer) setEngineer(data.engineer);
-    if (data.masteringEngineer) setMasteringEngineer(data.masteringEngineer);
-    if (data.compositionDate) setCompositionDate(data.compositionDate);
-    if (data.compositionPlace) setCompositionPlace(data.compositionPlace);
-
-    if (typeof data.discCount === "number" && data.discCount > 0) {
-      setDiscCount(data.discCount);
-    }
-
-    if (data.format) {
-      const normalizedFormats = String(data.format)
-        .split(",")
-        .map((item: string) => item.trim())
-        .filter(Boolean)
-        .map((item: string) => {
-          const lower = item.toLowerCase();
-          if (lower.includes("cd")) return "CD";
-          if (lower.includes("vinyl") || lower.includes("lp")) return "Vinilo";
-          if (lower.includes("dvd")) return "DVD";
-          if (lower.includes("blu-ray") || lower.includes("bluray")) return "Bluray";
-          return null;
-        })
-        .filter(Boolean) as ("CD" | "Vinilo" | "DVD" | "Bluray")[];
-
-      if (normalizedFormats.length) {
-        setFormats([...new Set(normalizedFormats)]);
-      }
-    }
-
-    if (data.coverImage || data.thumb) {
-      setImageUrl(data.coverImage || data.thumb);
-    }
-
-    if (data.discogsUrl) {
-      setDiscogsUrl(data.discogsUrl);
-    }
-
-    if (genre === "classical") {
-      if (Array.isArray(data.discs) && data.discs.length > 0) {
-        setDiscs(data.discs);
-      } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-        setDiscs([
-          {
-            discNumber: 1,
-            works: [
-              {
-                title: "Tracklist",
-                movements: data.rawTracklist
-                  .filter((item: any) => item?.title && item?.type_ !== "heading")
-                  .map((item: any, index: number) => ({
-                    trackNumber: index + 1,
-                    title: item.title,
-                    duration: item.duration || "",
-                  })),
-              },
-            ],
-          },
-        ]);
-      }
-    } else {
-      if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-        setTracks(data.tracks);
-      } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-        setTracks(
-          data.rawTracklist
-            .filter((item: any) => item?.title && item?.type_ !== "heading")
-            .map((item: any, index: number) => ({
-              trackNumber: index + 1,
-              title: item.title,
-              duration: item.duration || "",
-            }))
-        );
-      }
-    }
-
-    alert("Datos cargados desde Discogs.");
-  } catch (error: any) {
-    console.error("Discogs fetch error:", error);
-    alert(error.message || "No se pudo obtener información desde Discogs.");
-  } finally {
-    setIsFetchingDiscogs(false);
-  }
-};
-
   const resolveImage = async () => {
     if (!imageUrl || imageUrl.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i)) return;
     setResolving(true);
@@ -3230,90 +3102,6 @@ const handleFetchFromDiscogs = async () => {
       setFetchingMetadata(false);
     }
   };
-  const buildAlbumDataForArtist = (targetArtistId: string, targetArtistName: string) => ({
-    title,
-    releaseYear,
-    imageUrl,
-    artistId: targetArtistId,
-    genre,
-    sidemenIds,
-    artistName: targetArtistName,
-    recordingDates,
-    releaseDate,
-    location,
-    label,
-    catalogNumber,
-    originalCatalogNumber,
-    editionCatalogNumber,
-    editionDate,
-    country,
-    originalLabel,
-    originalYear,
-    foundationDate,
-    foundationPlace,
-    founderName,
-    choirMaster,
-    engineer,
-    masteringEngineer,
-    producer,
-    discCount,
-    formats,
-    orchestra,
-    conductor,
-    compositionDate,
-    compositionPlace,
-    musicians,
-    tracks,
-    discs,
-    anecdotes,
-  });
-
-  const approveCurrentComposer = async () => {
-    if (!composerData?.name) return;
-
-    setSaving(true);
-
-    try {
-      const existingArtist = await getArtistByName(composerData.name);
-      const targetArtistId = existingArtist?.id || slugifyArtistId(composerData.name);
-
-      if (!existingArtist) {
-        await saveArtistData(targetArtistId, {
-          id: targetArtistId,
-          name: composerData.name,
-          genre: 'classical',
-          biography: composerData.biography || '',
-          biographySections: composerData.biographySections || [],
-          imageUrl: composerData.imageUrl || '',
-          birthDate: composerData.birthDate || '',
-          birthPlace: composerData.birthPlace || '',
-          deathDate: composerData.deathDate || '',
-          deathPlace: composerData.deathPlace || '',
-          instruments: composerData.instruments || [],
-          periods: composerData.periods || [],
-        });
-      }
-
-      await addDoc(collection(db, 'albums'), buildAlbumDataForArtist(targetArtistId, composerData.name));
-
-      if (currentComposerIndex < pendingComposers.length - 1) {
-        setCurrentComposerIndex(currentComposerIndex + 1);
-        setComposerData(null);
-      } else {
-        setPendingComposers([]);
-        setComposerData(null);
-        setCurrentComposerIndex(0);
-        alert('Álbum guardado para todos los compositores aprobados.');
-      }
-    } catch (error) {
-      const errInfo = handleFirestoreError(error, OperationType.CREATE, 'artists/albums');
-      console.error('Composer album approval failed:', errInfo);
-      alert('No se pudo guardar este compositor/álbum. Revisa la consola.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -4579,6 +4367,90 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     });
     return unsubscribe;
   }, []);
+
+  const buildAlbumDataForArtist = (targetArtistId: string, targetArtistName: string) => ({
+    title,
+    releaseYear,
+    imageUrl,
+    artistId: targetArtistId,
+    genre,
+    sidemenIds,
+    artistName: targetArtistName,
+    recordingDates,
+    releaseDate,
+    location,
+    label,
+    catalogNumber,
+    originalCatalogNumber,
+    editionCatalogNumber,
+    editionDate,
+    country,
+    originalLabel,
+    originalYear,
+    foundationDate,
+    foundationPlace,
+    founderName,
+    choirMaster,
+    engineer,
+    masteringEngineer,
+    producer,
+    discCount,
+    formats,
+    orchestra,
+    conductor,
+    compositionDate,
+    compositionPlace,
+    musicians,
+    tracks,
+    discs,
+    anecdotes,
+  });
+
+  const approveCurrentComposer = async () => {
+    if (!composerData?.name) return;
+
+    setSaving(true);
+
+    try {
+      const existingArtist = await getArtistByName(composerData.name);
+      const targetArtistId = existingArtist?.id || slugifyArtistId(composerData.name);
+
+      if (!existingArtist) {
+        await saveArtistData(targetArtistId, {
+          id: targetArtistId,
+          name: composerData.name,
+          genre: 'classical',
+          biography: composerData.biography || '',
+          biographySections: composerData.biographySections || [],
+          imageUrl: composerData.imageUrl || '',
+          birthDate: composerData.birthDate || '',
+          birthPlace: composerData.birthPlace || '',
+          deathDate: composerData.deathDate || '',
+          deathPlace: composerData.deathPlace || '',
+          instruments: composerData.instruments || [],
+          periods: composerData.periods || [],
+        });
+      }
+
+      await addDoc(collection(db, 'albums'), buildAlbumDataForArtist(targetArtistId, composerData.name));
+
+      if (currentComposerIndex < pendingComposers.length - 1) {
+        setCurrentComposerIndex(currentComposerIndex + 1);
+        setComposerData(null);
+      } else {
+        setPendingComposers([]);
+        setComposerData(null);
+        setCurrentComposerIndex(0);
+        alert('Álbum guardado para todos los compositores aprobados.');
+      }
+    } catch (error) {
+      const errInfo = handleFirestoreError(error, OperationType.CREATE, 'artists/albums');
+      console.error('Composer album approval failed:', errInfo);
+      alert('No se pudo guardar este compositor/álbum. Revisa la consola.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
