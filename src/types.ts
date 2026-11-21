@@ -35,6 +35,15 @@ export interface Movement {
   duration: string;
   side?: 'A' | 'B';
   notes?: string;
+  orchestra?: string;
+  conductor?: string;
+  soloists?: Soloist[];
+  compositionDate?: string;
+  compositionPlace?: string;
+  foundationDate?: string;
+  foundationPlace?: string;
+  founderName?: string;
+  choirMaster?: string;
 }
 
 export interface Work {
