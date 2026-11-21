@@ -1,7 +1,7 @@
 import React, { useState, useEffect, createContext, useContext, ReactNode, useCallback, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Link, useLocation, useParams, useNavigate } from 'react-router-dom';
 import { collection, onSnapshot, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, getDocFromServer, getDocs } from 'firebase/firestore';
-import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { signInWithPopup, signInWithEmailAndPassword, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { ref, uploadString, getDownloadURL, uploadBytes } from 'firebase/storage';
 import imageCompression from 'browser-image-compression';
 import { db, storage, auth } from './firebase';
@@ -294,7 +294,7 @@ function Footer() {
 // --- Pages ---
 
 function RecordLabelCleanup() {
-  const { isAdmin } = useAuth();
+  const { canAccess } = useAuth();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState('');
   const cleanExistingLabels = async () => {
@@ -333,7 +333,7 @@ function RecordLabelCleanup() {
       setRunning(false);
     }
   };
-  if (!isAdmin) return null;
+  if (!canAccess) return null;
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 border border-gold/30 rounded-2xl flex flex-wrap items-center gap-3">
       <span className="text-sm">Mantenimiento de sellos discográficos</span>
@@ -709,13 +709,13 @@ function GenrePage({ genre }: { genre: Genre }) {
   const [isAdding, setIsAdding] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'none'>('none');
-  const { isAdmin } = useAuth();
+  const { canAccess } = useAuth();
   const [addingImages, setAddingImages] = useState(false);
   const [imageFeedback, setImageFeedback] = useState('');
 
   const fillMissingPortraits = async () => {
     const missing = artists.filter(artist => !artist.imageUrl?.trim());
-    if (!missing.length || !isAdmin || addingImages) return;
+    if (!missing.length || !canAccess || addingImages) return;
     if (!window.confirm(`Buscar y guardar retratos para ${missing.length} artistas sin imagen? No se modificarán las fotos existentes.`)) return;
     setAddingImages(true);
     setImageFeedback('Buscando imágenes...');
@@ -794,7 +794,7 @@ function GenrePage({ genre }: { genre: Genre }) {
             <ArrowDownAZ size={16} />
             <span>A-Z</span>
           </button>
-          {isAdmin && artists.some(artist => !artist.imageUrl?.trim()) && (
+          {canAccess && artists.some(artist => !artist.imageUrl?.trim()) && (
             <button type="button" onClick={fillMissingPortraits} disabled={addingImages}
               className="px-4 py-3 border border-gold text-gold rounded-full text-xs font-bold disabled:opacity-50">
               {addingImages ? 'Buscando fotos...' : 'Completar fotos'}
@@ -1425,13 +1425,13 @@ function AlbumCard({ album, viewMode = 'grid', highlightArtistId }: { album: Alb
 }
 
 function CollectionButton({ albumId, status, currentStatus }: { albumId: string, status: 'owned' | 'wishlist', currentStatus: string | null }) {
-  const { isAdmin } = useAuth();
+  const { canAccess } = useAuth();
   const isActive = currentStatus === status;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!isAdmin) return;
+    if (!canAccess) return;
     
     try {
       const collectionRef = collection(db, 'collection');
@@ -1462,8 +1462,8 @@ function CollectionButton({ albumId, status, currentStatus }: { albumId: string,
   return (
     <button 
       onClick={handleClick}
-      disabled={!isAdmin}
-      aria-label={!isAdmin ? 'Solo el administrador puede modificar la colección' : undefined}
+      disabled={!canAccess}
+      aria-label={!canAccess ? 'Acceso reservado a los dos miembros' : undefined}
       className={cn(
         "w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-sm",
         isActive ? "bg-gold text-white" : "bg-paper/90 backdrop-blur-sm text-ink hover:text-gold"
@@ -5927,11 +5927,19 @@ function ScrollToTop() {
 }
 
 // --- Auth Context ---
+// This client-side gate is for UX; Firestore and Storage security rules must
+// also be deployed to prevent direct access to private catalog data.
+const ALLOWED_EMAILS = new Set([
+  'debbiebli262@gmail.com',
+  'javierblinder@yahoo.com.ar',
+]);
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  isAdmin: boolean;
+  canAccess: boolean;
   login: () => Promise<void>;
+  loginWithPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -5941,35 +5949,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, []);
+  useEffect(() => onAuthStateChanged(auth, (currentUser) => {
+    setUser(currentUser);
+    setLoading(false);
+  }), []);
 
-  const isAdmin = user?.email === "debbiebli262@gmail.com" && user.emailVerified;
+  const canAccess = Boolean(user?.emailVerified &&
+    ALLOWED_EMAILS.has(user.email?.trim().toLowerCase() || ''));
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login error:", error);
-    }
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signInWithPopup(auth, provider);
   };
 
-  const logout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("Logout error:", error);
+  const loginWithPassword = async (email: string, password: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!ALLOWED_EMAILS.has(normalizedEmail)) {
+      throw new Error('Esta cuenta no tiene acceso a la biblioteca.');
     }
+    // Existing Firebase users only; there is intentionally no registration UI.
+    await signInWithEmailAndPassword(auth, normalizedEmail, password);
   };
+
+  const logout = async () => { await signOut(auth); };
 
   return (
-    <AuthContext.Provider value={{ user, loading, isAdmin, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, canAccess, login, loginWithPassword, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -5977,10 +5983,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
   return context;
+}
+
+function PrivateAccessGate({ children }: { children: ReactNode }) {
+  const { user, loading, canAccess, login, loginWithPassword, logout } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
+
+  if (loading) return (
+    <div className="min-h-[100dvh] flex items-center justify-center bg-paper text-ink/60">
+      Cargando biblioteca...
+    </div>
+  );
+
+  if (canAccess) return <>{children}</>;
+
+  const performLogin = async (action: () => Promise<void>) => {
+    setLoginError('');
+    setSigningIn(true);
+    try { await action(); }
+    catch (error) {
+      console.error('Sign-in error:', error);
+      setLoginError('No se pudo iniciar sesión. Comprueba la cuenta y el método de acceso.');
+    } finally { setSigningIn(false); }
+  };
+
+  return (
+    <div className="min-h-[100dvh] bg-paper flex flex-col items-center justify-center px-5 py-12">
+      <div className="w-full max-w-md rounded-3xl bg-white shadow-xl border border-ink/10 p-6 sm:p-10 space-y-6">
+        <div className="text-center space-y-2">
+          <div className="mx-auto w-14 h-14 rounded-full bg-ink text-paper flex items-center justify-center">
+            <Music size={27} />
+          </div>
+          <h1 className="font-serif text-3xl">Música Elegante</h1>
+          <p className="text-sm text-ink/60">Biblioteca privada. Acceso exclusivo para las dos cuentas autorizadas.</p>
+        </div>
+        {user && !canAccess && (
+          <div className="rounded-xl bg-ink/5 p-4 text-sm space-y-3">
+            <p>La cuenta {user.email || 'actual'} no está autorizada o su correo aún no está verificado.</p>
+            <button type="button" className="underline text-gold" onClick={() => void logout()}>
+              Salir y cambiar de cuenta
+            </button>
+          </div>
+        )}
+        {!user && (
+          <>
+            <button type="button" disabled={signingIn}
+              onClick={() => void performLogin(login)}
+              className="w-full rounded-xl bg-ink py-3 px-4 text-paper font-medium disabled:opacity-50">
+              Entrar con Google
+            </button>
+            <div className="flex items-center gap-3 text-xs uppercase tracking-wider text-ink/40">
+              <div className="h-px bg-ink/10 flex-1" />o con correo y contraseña<div className="h-px bg-ink/10 flex-1" />
+            </div>
+            <form className="space-y-3" onSubmit={event => {
+              event.preventDefault();
+              void performLogin(() => loginWithPassword(email, password));
+            }}>
+              <input type="email" autoComplete="username" required placeholder="Correo electrónico"
+                value={email} onChange={e => setEmail(e.target.value)}
+                className="w-full rounded-xl bg-ink/5 px-4 py-3 text-base" />
+              <input type="password" autoComplete="current-password" required placeholder="Contraseña"
+                value={password} onChange={e => setPassword(e.target.value)}
+                className="w-full rounded-xl bg-ink/5 px-4 py-3 text-base" />
+              <button type="submit" disabled={signingIn}
+                className="w-full border border-ink/20 rounded-xl py-3 font-medium disabled:opacity-50">
+                Entrar con correo
+              </button>
+            </form>
+          </>
+        )}
+        {loginError && <p role="alert" className="text-red-700 text-sm">{loginError}</p>}
+        <p className="text-xs text-ink/50 text-center">No hay registro público. Para usar correo y contraseña, la cuenta debe existir en Firebase Authentication.</p>
+      </div>
+    </div>
+  );
 }
 
 function MainLayout() {
@@ -6014,7 +6095,7 @@ export default function App() {
       <AuthProvider>
         <Router>
           <ScrollToTop />
-          <MainLayout />
+          <PrivateAccessGate><MainLayout /></PrivateAccessGate>
         </Router>
       </AuthProvider>
     </ErrorBoundary>
