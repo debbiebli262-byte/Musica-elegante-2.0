@@ -388,11 +388,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? releaseData.artists.map((a: DiscogsArtist) => a.name).filter(Boolean).join(", ")
         : "";
 
-    const labelNames = Array.isArray(releaseData?.labels)
-      ? releaseData.labels.map((l: DiscogsLabel) => l.name).filter(Boolean).join(", ")
-      : Array.isArray(found.label)
-        ? found.label.join(", ")
-        : "";
+    const labelValues: string[] = Array.isArray(releaseData?.labels)
+      ? releaseData.labels.map((l: DiscogsLabel) => l.name || "")
+      : Array.isArray(found.label) ? found.label : [];
+    // Discogs can list the same company once per catalog entry. Preserve
+    // distinct labels but never repeat an identical name.
+    const seenLabels = new Set<string>();
+    const labelNames = labelValues.map(label => String(label).trim()).filter(label => {
+      const key = label.normalize("NFKC").replace(/\\s+/g, " ").toLowerCase();
+      if (!label || seenLabels.has(key)) return false;
+      seenLabels.add(key);
+      return true;
+    }).join(", ");
 
     const mainCatno =
       releaseData?.labels?.[0]?.catno ||
