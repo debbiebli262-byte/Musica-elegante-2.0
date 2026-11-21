@@ -87,6 +87,8 @@ export interface Track {
 
 export interface Album {
   id: string;
+  /** Work = musical composition entry; recording = a particular release/performance. */
+  recordType?: 'work' | 'recording';
   artistId: string;
   artistName?: string;
   sidemenIds?: string[]; // IDs of artists who are sidemen on this album
