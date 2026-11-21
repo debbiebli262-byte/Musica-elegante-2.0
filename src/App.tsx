@@ -309,6 +309,7 @@ function CatalogMaintenance() {
   const [report, setReport] = useState<ReturnType<typeof inspectCatalog> | null>(null);
   const [message, setMessage] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [backupDownloaded, setBackupDownloaded] = useState(false);
 
   const loadCatalog = async () => {
     const [artistDocs, albumDocs, collectionDocs, jobDocs] = await Promise.all([
@@ -347,6 +348,7 @@ function CatalogMaintenance() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      setBackupDownloaded(true);
       setMessage(`Archivo JSON preparado: ${data.artists.length} artistas y ${data.albums.length} álbumes. Guarda una copia segura.`);
     } catch (error) {
       console.error('Backup failed', error);
@@ -370,6 +372,35 @@ function CatalogMaintenance() {
     } finally { setRunning(false); }
   };
 
+  const fixRepeatedLabels = async () => {
+    if (!backupDownloaded || running) return;
+    if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
+    setRunning(true);
+    try {
+      const snapshot = await getDocs(collection(db, 'albums'));
+      let fixed = 0;
+      let failed = 0;
+      for (const item of snapshot.docs) {
+        const changes: Record<string, string> = {};
+        for (const field of ['label', 'originalLabel'] as const) {
+          const value = item.data()[field];
+          if (typeof value === 'string' && normalizeRecordLabels(value) !== value) {
+            changes[field] = normalizeRecordLabels(value);
+          }
+        }
+        if (!Object.keys(changes).length) continue;
+        try { await updateDoc(item.ref, changes); fixed++; }
+        catch (error) { console.error('Could not correct labels', item.id, error); failed++; }
+      }
+      setReport(null);
+      setPreviewOpen(false);
+      setMessage(`Se corrigieron ${fixed} álbumes. Errores: ${failed}. Los demás datos no cambiaron.`);
+    } catch (error) {
+      console.error('Label correction failed', error);
+      setMessage('No se pudo completar la corrección. Revisa tus permisos.');
+    } finally { setRunning(false); }
+  };
+
   if (!canAccess) return null;
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 space-y-3" aria-label="Mantenimiento y copias de seguridad">
@@ -382,6 +413,11 @@ function CatalogMaintenance() {
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={downloadBackup} disabled={running} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-50">Descargar copia JSON</button>
             <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
+            <button type="button" onClick={fixRepeatedLabels} disabled={running || !backupDownloaded}
+              title={backupDownloaded ? 'Corregir sellos repetidos' : 'Descarga primero una copia de seguridad'}
+              className="rounded-full border border-gold/50 text-gold px-4 py-3 text-sm disabled:opacity-40">
+              Corregir sellos repetidos
+            </button>
           </div>
         </div>
         <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
