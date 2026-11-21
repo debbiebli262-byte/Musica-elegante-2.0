@@ -372,6 +372,37 @@ function CatalogMaintenance() {
     } finally { setRunning(false); }
   };
 
+  const downloadAuditReport = () => {
+    if (!report) return;
+    const categories: Record<string, string> = {
+      'missing-reference': 'Artista vinculado inexistente',
+      'missing-artist': 'Nombre de artista ausente',
+      'missing-title': 'Título ausente',
+      'repeated-label': 'Sello repetido',
+      'missing-classical-content': 'Obras o pistas clásicas sin documentar',
+      'possible-duplicate': 'Posible edición duplicada (revisión manual)'
+    };
+    const lines = [
+      'Música Elegante — Informe de integridad del catálogo',
+      'Fecha: ' + new Date().toISOString(),
+      'Observaciones: ' + report.length,
+      'Este informe no modifica ningún dato ni demuestra que los registros sean duplicados.',
+      '',
+      ...report.map((issue, index) =>
+        (index + 1) + '. [' + (categories[issue.kind] || issue.kind) + '] ' +
+        issue.title + ' (ID: ' + issue.albumId + ') — ' + issue.detail)
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'musica-elegante-informe-' + new Date().toISOString().slice(0, 10) + '.txt';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const fixRepeatedLabels = async () => {
     if (!backupDownloaded || running) return;
     if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
@@ -426,7 +457,10 @@ function CatalogMaintenance() {
           <div className="space-y-3 border-t border-ink/10 pt-3">
             <div className="flex justify-between items-center gap-3">
               <h3 className="font-medium text-sm">Observaciones ({report.length})</h3>
-              <button type="button" className="underline text-sm" onClick={() => setPreviewOpen(false)}>Ocultar</button>
+              <div className="flex flex-wrap gap-3 items-center">
+                <button type="button" className="text-gold underline text-sm" onClick={downloadAuditReport}>Descargar informe completo</button>
+                <button type="button" className="underline text-sm" onClick={() => setPreviewOpen(false)}>Ocultar</button>
+              </div>
             </div>
             {report.length === 0 ? <p className="text-sm text-ink/60">No se detectaron problemas con estas comprobaciones.</p> : (
               <div className="max-h-72 overflow-y-auto divide-y divide-ink/10 border border-ink/10 rounded-xl">
