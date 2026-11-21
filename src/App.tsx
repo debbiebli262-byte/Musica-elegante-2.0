@@ -1,6 +1,6 @@
 import React, { useState, useEffect, createContext, useContext, ReactNode, useCallback, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Link, useLocation, useParams, useNavigate } from 'react-router-dom';
-import { collection, onSnapshot, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, getDocFromServer, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, getDocFromServer, getDocs, runTransaction } from 'firebase/firestore';
 import { signInWithPopup, signInWithEmailAndPassword, GoogleAuthProvider, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { ref, uploadString, getDownloadURL, uploadBytes } from 'firebase/storage';
 import imageCompression from 'browser-image-compression';
@@ -12,6 +12,7 @@ import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
+import { proposeArtistRepairs, isRepairStillApplicable, type ArtistRepair } from './utils/artistRepairs';
 import { privateApiFetch } from './services/privateApi';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
@@ -310,6 +311,7 @@ function CatalogMaintenance() {
   const [message, setMessage] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [backupDownloaded, setBackupDownloaded] = useState(false);
+  const [artistRepairs, setArtistRepairs] = useState<ArtistRepair[] | null>(null);
 
   const loadCatalog = async () => {
     const [artistDocs, albumDocs, collectionDocs, jobDocs] = await Promise.all([
@@ -403,6 +405,59 @@ function CatalogMaintenance() {
     URL.revokeObjectURL(url);
   };
 
+  const previewArtistRepairs = async () => {
+    if (running) return;
+    setRunning(true);
+    setMessage('Revisando nombres y enlaces con datos actuales de Firebase...');
+    try {
+      const data = await loadCatalog();
+      const proposals = proposeArtistRepairs(data.albums, data.artists);
+      setArtistRepairs(proposals);
+      setMessage(`Hay ${proposals.length} correcciones propuestas. Revisa los detalles antes de aplicar; ningún dato fue cambiado.`);
+    } catch (error) {
+      console.error('Could not preview artist repairs:', error);
+      setMessage('No se pudo revisar los enlaces de artistas. No se cambió ningún dato.');
+    } finally { setRunning(false); }
+  };
+
+  const applyArtistRepairs = async () => {
+    if (!backupDownloaded || !artistRepairs?.length || running) return;
+    if (!window.confirm(`¿Aplicar ${artistRepairs.length} correcciones verificadas de nombres y referencias? Se conservarán los títulos, pistas, ediciones y créditos de las grabaciones.`)) return;
+    setRunning(true);
+    let updated = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const proposal of artistRepairs) {
+      try {
+        await runTransaction(db, async transaction => {
+          const albumRef = doc(db, 'albums', proposal.albumId);
+          const current = await transaction.get(albumRef);
+          if (!current.exists()) throw new Error('Album no longer exists');
+          const data = { ...current.data(), id: current.id } as Album;
+          if (!isRepairStillApplicable(data, proposal)) throw new Error('Album changed since preview');
+          const targetId = proposal.changes.artistId || data.artistId;
+          const target = await transaction.get(doc(db, 'artists', targetId));
+          if (!target.exists()) throw new Error('Target artist missing');
+          if (proposal.changes.artistName && target.data().name !== proposal.changes.artistName) {
+            throw new Error('Artist name changed since preview');
+          }
+          transaction.update(albumRef, proposal.changes);
+        });
+        updated++;
+      } catch (error) {
+        const note = error instanceof Error ? error.message : String(error);
+        if (note.includes('changed since preview') || note.includes('no longer exists') || note.includes('Target artist missing') || note.includes('Artist name changed')) skipped++;
+        else failed++;
+        console.error('Artist repair not applied:', proposal.albumId, error);
+      }
+    }
+    setRunning(false);
+    setArtistRepairs(null);
+    setReport(null);
+    setPreviewOpen(false);
+    setMessage(`Correcciones guardadas: ${updated}. Omitidas por datos cambiados: ${skipped}. Errores: ${failed}. Revisa el catálogo otra vez.`);
+  };
+
   const fixRepeatedLabels = async () => {
     if (!backupDownloaded || running) return;
     if (!window.confirm('¿Guardar los sellos sin repeticiones en el catálogo? Sólo se modificarán las etiquetas repetidas, nunca se borrarán álbumes.')) return;
@@ -444,6 +499,8 @@ function CatalogMaintenance() {
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={downloadBackup} disabled={running} className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-50">Descargar copia JSON</button>
             <button type="button" onClick={inspect} disabled={running} className="rounded-full border border-ink/20 px-4 py-3 text-sm disabled:opacity-50">Revisar catálogo</button>
+            <button type="button" onClick={previewArtistRepairs} disabled={running}
+              className="rounded-full border border-gold/50 text-ink px-4 py-3 text-sm disabled:opacity-50">Reparar enlaces de artistas</button>
             <button type="button" onClick={fixRepeatedLabels} disabled={running || !backupDownloaded}
               title={backupDownloaded ? 'Corregir sellos repetidos' : 'Descarga primero una copia de seguridad'}
               className="rounded-full border border-gold/50 text-gold px-4 py-3 text-sm disabled:opacity-40">
@@ -453,6 +510,34 @@ function CatalogMaintenance() {
         </div>
         <p className="text-xs text-ink/50">La copia incluye artistas, álbumes, colección y trabajos de importación. No incluye las imágenes ni documentos almacenados en Firebase Storage.</p>
         {message && <p role="status" className="text-sm text-ink/70">{message}</p>}
+        {artistRepairs !== null && (
+          <div className="border-t border-ink/10 pt-4 space-y-3">
+            <h3 className="font-serif text-xl">Vista previa: correcciones de artistas ({artistRepairs.length})</h3>
+            <p className="text-xs text-ink/60">No se modificará ninguna otra propiedad. Esta acción no inventa movimientos ni borra ediciones. Primero descarga una copia JSON nueva en esta sesión.</p>
+            {artistRepairs.length ? (
+              <div className="max-h-80 overflow-y-auto divide-y divide-ink/10 rounded-xl border border-ink/10">
+                {artistRepairs.map(proposal => (
+                  <div key={proposal.albumId} className="p-3 text-sm space-y-1">
+                    <p className="font-semibold">{proposal.title}</p>
+                    <p className="text-ink/65">{proposal.kind === 'fill-artist-name'
+                      ? `Nombre: ${proposal.changes.artistName}`
+                      : `Enlace: ${proposal.expectedArtistId} → ${proposal.changes.artistId}`}</p>
+                    <p className="text-xs text-ink/50">{proposal.explanation}</p>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm">No quedan reparaciones conocidas por aplicar.</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={!backupDownloaded || running || artistRepairs.length === 0}
+                onClick={applyArtistRepairs} title={!backupDownloaded ? 'Descarga primero una copia JSON nueva' : undefined}
+                className="rounded-full bg-ink text-paper px-4 py-3 text-sm disabled:opacity-40">
+                Aplicar correcciones verificadas
+              </button>
+              <button type="button" onClick={() => setArtistRepairs(null)}
+                className="rounded-full border border-ink/20 px-4 py-3 text-sm">Cancelar</button>
+            </div>
+          </div>
+        )}
         {previewOpen && report !== null && (
           <div className="space-y-3 border-t border-ink/10 pt-3">
             <div className="flex justify-between items-center gap-3">
