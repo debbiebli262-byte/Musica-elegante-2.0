@@ -4428,9 +4428,9 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [engineer, setEngineer] = useState(album?.engineer || '');
   const [masteringEngineer, setMasteringEngineer] = useState(album?.masteringEngineer || '');
   const [producer, setProducer] = useState(album?.producer || '');
-  const [discCount, setDiscCount] = useState<number>(album?.discCount || 1);
+  const [discCount, setDiscCount] = useState<number>(album?.discCount ?? (album && getCatalogRecordType(album) === 'work' ? 0 : 1));
   const [formats, setFormats] = useState<('CD' | 'Vinilo' | 'DVD' | 'Bluray')[]>(
-    album?.formats || ((album as any)?.format ? [(album as any).format] : ['CD'])
+    album?.formats || ((album as any)?.format ? [(album as any).format] : (album && getCatalogRecordType(album) === 'work' ? [] : ['CD']))
   );
   const [orchestra, setOrchestra] = useState(album?.orchestra || '');
   const [conductor, setConductor] = useState(album?.conductor || '');
@@ -4438,7 +4438,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [compositionPlace, setCompositionPlace] = useState(album?.compositionPlace || '');
   const [musicians, setMusicians] = useState<Musician[]>(album?.musicians || []);
   const [tracks, setTracks] = useState<Track[]>(album?.tracks || []);
-  const [discs, setDiscs] = useState<Disc[]>(album?.discs || (genre === 'classical' ? [{ discNumber: 1, works: [] }] : []));
+  const [discs, setDiscs] = useState<Disc[]>(album?.discs || (genre === 'classical' && !(album && getCatalogRecordType(album) === 'work') ? [{ discNumber: 1, works: [] }] : []));
   const [anecdotes, setAnecdotes] = useState(album?.anecdotes || '');
   const [pendingComposers, setPendingComposers] = useState<string[]>([]);
   const [currentComposerIndex, setCurrentComposerIndex] = useState(0);
@@ -4969,7 +4969,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Año de Lanzamiento</label>
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">{recordType === 'work' ? 'Año de composición' : 'Año de Lanzamiento'}</label>
                   <input 
                     value={releaseYear}
                     onChange={(e) => setReleaseYear(e.target.value)}
