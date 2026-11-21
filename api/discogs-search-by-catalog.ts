@@ -1,4 +1,4 @@
-import { requireLibraryMember } from '../src/server/libraryAuth';
+import { requireLibraryMember } from '../src/server/libraryAuth.js';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 type DiscogsArtist = {
