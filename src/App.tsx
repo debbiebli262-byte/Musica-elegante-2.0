@@ -10,6 +10,7 @@ import { OperationType, handleFirestoreError, getArtistByName, saveArtistData } 
 import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
+import { normalizeRecordLabels } from './utils/recordLabels';
 import { motion, AnimatePresence } from 'motion/react';
 import { Music, Disc as DiscIcon, Heart, User as UserIcon, LogIn, LogOut, Plus, Edit2, Trash2, X, Save, ChevronRight, Info, Calendar, LayoutGrid, List, ArrowDownAZ, Upload, Users, Music2, PlusCircle, MinusCircle, Clock, Globe, Building2, Hash, UserCheck, Settings, FileText, Menu } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -292,6 +293,59 @@ function Footer() {
 
 // --- Pages ---
 
+function RecordLabelCleanup() {
+  const { isAdmin } = useAuth();
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState('');
+  const cleanExistingLabels = async () => {
+    if (running || !window.confirm('¿Corregir sellos repetidos en todos los álbumes? No se modificarán otros datos.')) return;
+    setRunning(true);
+    setResult('Revisando álbumes...');
+    let corrected = 0;
+    let failed = 0;
+    try {
+      const snapshot = await getDocs(collection(db, 'albums'));
+      for (const albumDoc of snapshot.docs) {
+        const data = albumDoc.data();
+        const changes: Record<string, string> = {};
+        for (const field of ['label', 'originalLabel']) {
+          const value = data[field];
+          if (typeof value === 'string') {
+            const normalized = normalizeRecordLabels(value);
+            if (normalized !== value) changes[field] = normalized;
+          }
+        }
+        if (Object.keys(changes).length) {
+          try {
+            await updateDoc(albumDoc.ref, changes);
+            corrected++;
+          } catch (error) {
+            failed++;
+            console.error('Error correcting album:', albumDoc.id, error);
+          }
+        }
+      }
+      setResult(`Listo: ${corrected} álbumes corregidos; ${failed} errores.`);
+    } catch (error) {
+      console.error('Could not review albums:', error);
+      setResult('No se pudo acceder a los álbumes. Revisa los permisos.');
+    } finally {
+      setRunning(false);
+    }
+  };
+  if (!isAdmin) return null;
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 border border-gold/30 rounded-2xl flex flex-wrap items-center gap-3">
+      <span className="text-sm">Mantenimiento de sellos discográficos</span>
+      <button type="button" onClick={cleanExistingLabels} disabled={running}
+        className="rounded-full bg-ink text-paper px-5 py-2 text-sm disabled:opacity-50">
+        {running ? 'Corrigiendo...' : 'Corregir sellos repetidos'}
+      </button>
+      {result && <span role="status" className="text-sm">{result}</span>}
+    </div>
+  );
+}
+
 function Home() {
   const [artists, setArtists] = useState<Artist[]>([]);
   
@@ -306,6 +360,7 @@ function Home() {
 
   return (
     <div className="space-y-20">
+      <RecordLabelCleanup />
       <section className="relative h-[80vh] flex items-center justify-center overflow-hidden">
         <div className="absolute inset-0 z-0">
           <img 
@@ -1939,7 +1994,7 @@ function ImportWordPage() {
           releaseYear: edition.editionYear || '',
           recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
           location: edition.recordingLocation || '',
-          label: edition.label || '',
+          label: normalizeRecordLabels(edition.label || ''),
           catalogNumber: edition.catalogNumber || '',
           formats: format ? [format] : [],
           orchestra: edition.orchestra || '',
@@ -2284,9 +2339,9 @@ function ComparePage() {
     { label: 'Fechas de grabación', getValue: (a: Album) => a.recordingDates || '—' },
     { label: 'Lugar de grabación', getValue: (a: Album) => a.location || '—' },
     { label: 'País', getValue: (a: Album) => a.country || '—' },
-    { label: 'Sello discográfico', getValue: (a: Album) => a.label || '—' },
+    { label: 'Sello discográfico', getValue: (a: Album) => normalizeRecordLabels(a.label) || '—' },
     { label: 'Número de catálogo', getValue: (a: Album) => a.catalogNumber || '—' },
-    { label: 'Sello original', getValue: (a: Album) => a.originalLabel || '—' },
+    { label: 'Sello original', getValue: (a: Album) => normalizeRecordLabels(a.originalLabel) || '—' },
     { label: 'Año original', getValue: (a: Album) => a.originalYear || '—' },
     { label: 'Catálogo original', getValue: (a: Album) => a.originalCatalogNumber || '—' },
     { label: 'Catálogo de edición', getValue: (a: Album) => a.editionCatalogNumber || '—' },
@@ -2529,8 +2584,8 @@ function DiscogsImportPage() {
       setReleaseYear(data.year ? String(data.year) : '');
       setEditionDate(data.year ? String(data.year) : '');
       setCountry(data.country || '');
-      setLabel(data.label || '');
-      setOriginalLabel(data.originalLabel || data.label || '');
+      setLabel(normalizeRecordLabels(data.label || ''));
+      setOriginalLabel(normalizeRecordLabels(data.originalLabel || data.label || ''));
       setCatalogNumber(data.catno || value);
       setEditionCatalogNumber(data.catno || value);
       setOriginalCatalogNumber(data.originalCatalogNumber || data.catno || '');
@@ -2634,12 +2689,12 @@ function DiscogsImportPage() {
         releaseYear,
         imageUrl,
         country,
-        label,
+        label: normalizeRecordLabels(label),
         catalogNumber,
         originalCatalogNumber,
         editionCatalogNumber,
         editionDate,
-        originalLabel,
+        originalLabel: normalizeRecordLabels(originalLabel),
         originalYear,
         orchestra,
         conductor,
@@ -3701,7 +3756,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.originalLabel && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original</span>
-                  <p className="text-sm font-medium">{album.originalLabel}</p>
+                  <p className="text-sm font-medium">{normalizeRecordLabels(album.originalLabel)}</p>
                 </div>
               )}
               {album.originalYear && (
@@ -3713,7 +3768,7 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
               {album.label && (
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello</span>
-                  <p className="text-sm font-medium">{album.label}</p>
+                  <p className="text-sm font-medium">{normalizeRecordLabels(album.label)}</p>
                 </div>
               )}
               {album.catalogNumber && (
@@ -3837,18 +3892,6 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Catálogo Original</span>
                   <p className="text-sm">{album.originalCatalogNumber}</p>
-                </div>
-              )}
-              {album.originalLabel && (
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original</span>
-                  <p className="text-sm">{album.originalLabel}</p>
-                </div>
-              )}
-              {album.originalYear && (
-                <div className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Año Original</span>
-                  <p className="text-sm">{album.originalYear}</p>
                 </div>
               )}
               {album.editionCatalogNumber && (
@@ -4298,14 +4341,14 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
       }
       if (data.country) setCountry(data.country);
       if (data.label) {
-        setLabel(data.label);
-        setOriginalLabel((current) => current || data.label);
+        setLabel(normalizeRecordLabels(data.label));
+        setOriginalLabel((current) => normalizeRecordLabels(current || data.label));
       }
       if (data.catno) {
         setCatalogNumber(data.catno);
         setEditionCatalogNumber((current) => current || data.catno);
       }
-      if (data.originalLabel) setOriginalLabel(data.originalLabel);
+      if (data.originalLabel) setOriginalLabel(normalizeRecordLabels(data.originalLabel));
       if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
       if (data.originalYear) setOriginalYear(String(data.originalYear));
       if (data.orchestra) setOrchestra(data.orchestra);
@@ -4436,13 +4479,13 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
     recordingDates,
     releaseDate,
     location,
-    label,
+    label: normalizeRecordLabels(label),
     catalogNumber,
     originalCatalogNumber,
     editionCatalogNumber,
     editionDate,
     country,
-    originalLabel,
+    originalLabel: normalizeRecordLabels(originalLabel),
     originalYear,
     foundationDate,
     foundationPlace,
@@ -4524,13 +4567,13 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         recordingDates,
         releaseDate,
         location,
-        label,
+        label: normalizeRecordLabels(label),
         catalogNumber,
         originalCatalogNumber,
         editionCatalogNumber,
         editionDate,
         country,
-        originalLabel,
+        originalLabel: normalizeRecordLabels(originalLabel),
         originalYear,
         foundationDate,
         foundationPlace,
