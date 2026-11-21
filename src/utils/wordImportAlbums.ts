@@ -1,3 +1,4 @@
+import { resolveWordDiscCount } from './wordSourceAccuracy.js';
 export interface WordAlbumCandidate {
   title: string;
   label: string;
@@ -33,7 +34,7 @@ export function wordAlbumCandidates(albums: Partial<WordAlbumCandidate>[], recor
     const candidate: WordAlbumCandidate = {
       title, label: String(source.label || ''), catalogNumber, barcode,
       format: String(source.format || ''), editionYear: String(source.editionYear || ''),
-      country: String(source.country || ''), discCount: Number(source.discCount) || 1,
+      country: String(source.country || ''), discCount: resolveWordDiscCount(String(source.format || ''), source.discCount),
       notes: String(source.notes || ''),
     };
     // Group only compatible records; an empty label/format means unknown, not a new edition.
