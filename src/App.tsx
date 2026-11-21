@@ -1627,6 +1627,10 @@ function SearchPage() {
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState<'year' | 'artist' | 'title' | 'label'>('year');
   const [genreFilter, setGenreFilter] = useState<'all' | Genre>('all');
+  const [formatFilter, setFormatFilter] = useState('all');
+  const [labelFilter, setLabelFilter] = useState('all');
+  const [yearFrom, setYearFrom] = useState('');
+  const [yearTo, setYearTo] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => {
@@ -1637,11 +1641,22 @@ function SearchPage() {
     return unsubscribe;
   }, []);
 
-  const normalizedQuery = searchText.trim().toLowerCase();
+  const normalizeSearch = (value: unknown) => String(value || '')
+    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLocaleLowerCase().trim();
+  const normalizedQuery = normalizeSearch(searchText);
+  const availableLabels = Array.from(new Set(albums.flatMap(album =>
+    normalizeRecordLabels(album.label).split(',').map(value => value.trim()).filter(Boolean))))
+    .sort((a, b) => a.localeCompare(b));
+  const availableFormats = Array.from(new Set(albums.flatMap(album => album.formats || []))).sort();
 
   const filteredAlbums = [...albums]
     .filter((album) => {
       if (genreFilter !== 'all' && album.genre !== genreFilter) return false;
+      if (formatFilter !== 'all' && !(album.formats || []).includes(formatFilter as 'CD' | 'Vinilo' | 'DVD' | 'Bluray')) return false;
+      if (labelFilter !== 'all' && !normalizeRecordLabels(album.label).split(',').some(value => normalizeSearch(value) === normalizeSearch(labelFilter))) return false;
+      const year = Number(album.releaseYear);
+      if (yearFrom && (!year || year < Number(yearFrom))) return false;
+      if (yearTo && (!year || year > Number(yearTo))) return false;
       if (!normalizedQuery) return true;
 
       const searchableValues = [
@@ -1664,12 +1679,23 @@ function SearchPage() {
         ...(album.formats || []),
         ...(album.musicians || []).flatMap((m) => [m.name, m.instrument, m.notes || '']),
         ...(album.soloists || []).flatMap((s) => [s.name, s.instrument, s.birthPlace || '', s.deathPlace || '']),
+        ...(album.tracks || []).flatMap(track => [track.title, track.orchestra || '', track.conductor || '', ...(track.soloists || []).map(soloist => soloist.name)]),
+        ...(album.discs || []).flatMap(disc => [
+          disc.title || '',
+          ...(disc.works || []).flatMap(work => [
+            work.title, work.composer || '', work.orchestra || '', work.conductor || '',
+            ...(work.soloists || []).map(soloist => soloist.name),
+            ...(work.movements || []).flatMap(movement => [
+              movement.title, movement.orchestra || '', movement.conductor || '',
+              ...(movement.soloists || []).map(soloist => soloist.name)
+            ])
+          ])
+        ]),
       ]
         .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-
-      return searchableValues.includes(normalizedQuery);
+        .join(' ');
+      const searchable = normalizeSearch(searchableValues);
+      return normalizedQuery.split(/\\s+/).every(word => searchable.includes(word));
     })
     .sort((a, b) => {
       if (sortBy === 'year') return Number(a.releaseYear || 0) - Number(b.releaseYear || 0);
@@ -1689,7 +1715,7 @@ function SearchPage() {
       </div>
 
       <div className="rounded-3xl border border-ink/10 bg-white p-5 md:p-6 shadow-sm space-y-5">
-        <div className="grid grid-cols-1 lg:grid-cols-[1.5fr,0.75fr,0.75fr] gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[1.5fr_0.75fr_0.75fr] gap-4">
           <input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
@@ -1717,10 +1743,39 @@ function SearchPage() {
           </select>
         </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Sello discográfico
+            <select value={labelFilter} onChange={e => setLabelFilter(e.target.value)}
+              className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
+              <option value="all">Todos los sellos</option>
+              {availableLabels.map(label => <option key={label} value={label}>{label}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Formato
+            <select value={formatFilter} onChange={e => setFormatFilter(e.target.value)}
+              className="w-full min-w-0 bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none">
+              <option value="all">Todos los formatos</option>
+              {availableFormats.map(format => <option key={format} value={format}>{format}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Año desde
+            <input type="number" inputMode="numeric" min="1000" max="2100" placeholder="Ej. 1950"
+              value={yearFrom} onChange={e => setYearFrom(e.target.value)}
+              className="w-full bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none" />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-ink/60">Año hasta
+            <input type="number" inputMode="numeric" min="1000" max="2100" placeholder="Ej. 2000"
+              value={yearTo} onChange={e => setYearTo(e.target.value)}
+              className="w-full bg-ink/5 rounded-xl px-3 py-3 text-base text-ink border-none" />
+          </label>
+        </div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <p className="text-sm text-ink/50">
             {filteredAlbums.length} resultado{filteredAlbums.length === 1 ? '' : 's'}
           </p>
+          <button type="button" className="text-xs underline text-ink/60" onClick={() => {
+            setSearchText(''); setGenreFilter('all'); setFormatFilter('all'); setLabelFilter('all'); setYearFrom(''); setYearTo('');
+          }}>Limpiar filtros</button>
           <div className="flex bg-ink/5 p-1 rounded-full w-fit">
             <button onClick={() => setViewMode('grid')} className={cn("p-2 rounded-full", viewMode === 'grid' ? "bg-paper text-gold" : "text-ink/40")}>
               <LayoutGrid size={18} />
