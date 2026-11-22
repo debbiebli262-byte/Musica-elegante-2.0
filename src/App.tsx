@@ -130,6 +130,7 @@ interface ImportJobRecord {
   approvedAt?: string;
   source?: string;
   reviewedEditions?: ReviewedEdition[];
+  dataUrl?: string;
   completedAlbumIds?: string[];
   storagePath?: string;
   fileUrl?: string;
@@ -2216,6 +2217,17 @@ async function uploadWordFileToStorage(file: File) {
   return { storagePath, downloadURL };
 }
 
+/** Firestore has a 1 MiB/document limit. Large reviews live in authenticated Storage. */
+async function persistWordReview(jobId:string, parsed:ParsedWordImport, editions:ReviewedEdition[]) {
+  const serialized=JSON.stringify({extractedData:parsed,reviewedEditions:editions});
+  if(new TextEncoder().encode(serialized).length<600000){
+    return {extractedData:parsed,reviewedEditions:editions,dataUrl:''};
+  }
+  const place=ref(storage,'imports/word/reviews/'+jobId+'.json');
+  const snapshot=await uploadBytes(place,new Blob([serialized],{type:'application/json'}));
+  return {extractedData:null,reviewedEditions:[],dataUrl:await getDownloadURL(snapshot.ref)};
+}
+
 async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
   const formData = new FormData();
   formData.append('file', file);
@@ -2474,7 +2486,7 @@ function ImportWordPage() {
         status: 'draft', source: 'word_upload',
         fileUrl: upload?.downloadURL || previous.data()?.fileUrl || '',
         storagePath: upload?.storagePath || previous.data()?.storagePath || '',
-        extractedData: parsedData, reviewedEditions,
+        ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
         completedAlbumIds: previous.data()?.completedAlbumIds || [],
       }, {merge:true});
       setActiveJobId(jobId);
@@ -2483,15 +2495,27 @@ function ImportWordPage() {
       setMessage('Error guardando borrador: ' + (error instanceof Error ? error.message : String(error)));
     } finally {setIsSavingDraft(false);}
   };
-  const resumeWordJob = (job:ImportJobRecord) => {
-    if (!job.extractedData || job.status === 'approved') {
-      setMessage('Este trabajo ya fue aprobado o no tiene datos reutilizables.');return;
+  const resumeWordJob = async (job:ImportJobRecord) => {
+    if((!job.extractedData&&!job.dataUrl)||job.status==='approved'){
+      setMessage('Este trabajo está aprobado o no tiene datos que reanudar.');return;
     }
-    setSelectedFile(null);setPendingFiles([]);setBatchResults([]);
-    setActiveJobId(job.id);
-    setActiveParsed(job.extractedData, job.reviewedEditions?.length?job.reviewedEditions:undefined);
-    setMessage('Borrador restaurado. Revisa los datos y descarga una copia nueva antes de guardar.');
+    try {
+      let parsed=job.extractedData||null,editions=job.reviewedEditions;
+      if(!parsed&&job.dataUrl){
+        const response=await fetch(job.dataUrl);
+        if(!response.ok)throw new Error('No se pudo obtener la revisión guardada.');
+        const payload=await response.json();
+        parsed=payload.extractedData;
+        editions=payload.reviewedEditions;
+      }
+      if(!parsed)throw new Error('Faltan los datos de la revisión.');
+      setSelectedFile(null);setPendingFiles([]);setBatchResults([]);
+      setActiveJobId(job.id);
+      setActiveParsed(parsed,editions?.length?editions:undefined);
+      setMessage('Borrador recuperado. Revisa los datos y descarga un backup nuevo antes de guardar.');
+    }catch(error){setMessage('No se pudo recuperar: '+(error instanceof Error?error.message:String(error)));}
   };
+
   const prepareWordBackup = async () => {
     if (!parsedData?.composer?.name) return;
     setMessage('');
@@ -2612,7 +2636,7 @@ function ImportWordPage() {
         fileName:selectedFile?.name||parsedData.sourceFileName||'Word',
         createdAt:prior.data()?.createdAt||new Date().toISOString(),
         source:'word_upload',status:'draft',fileUrl,storagePath,
-        extractedData:parsedData,reviewedEditions,
+        ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
         completedAlbumIds:prior.data()?.completedAlbumIds||[],
         lastAttemptAt:new Date().toISOString(),
       },{merge:true});
@@ -2710,7 +2734,7 @@ function ImportWordPage() {
       }
       await setDoc(jobRef,{
         status:'approved',approvedAt:new Date().toISOString(),
-        completedAlbumIds:[...completed],reviewedEditions,extractedData:parsedData,
+        completedAlbumIds:[...completed],...(await persistWordReview(jobId,parsedData,reviewedEditions)),
       },{merge:true});
       setMessage('✓ Guardados '+savedCount+' álbum(es); '+skippedCount+
         ' ediciones existentes omitidas. Progreso registrado y backup disponible.');
@@ -3200,7 +3224,7 @@ function ImportWordPage() {
                         'inline-flex items-center rounded-full px-3 py-1 text-xs uppercase tracking-widest font-bold',
                         job.status === 'approved' ? 'bg-gold/15 text-gold' : job.status === 'failed' ? 'bg-red-100 text-red-600' : 'bg-ink/5 text-ink/60'
                       )}>{job.status}</div>
-                      {job.status!=='approved' && Boolean(job.extractedData) && (
+                      {job.status!=='approved' && Boolean(job.extractedData||job.dataUrl) && (
                         <button type="button" onClick={()=>resumeWordJob(job)}
                           className="rounded-full border border-ink/15 px-3 py-2 text-xs">Reabrir / Reanudar</button>
                       )}
