@@ -2306,7 +2306,7 @@ function ImportWordPage() {
   }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
+    const files = Array.from(event.target.files || []) as File[];
     const valid = files.filter(file=>file.name.toLowerCase().endsWith('.docx') && file.size <= 8*1024*1024);
     setPendingFiles(valid);
     setSelectedFile(valid[0]||null);
