@@ -1,5 +1,5 @@
 import { extractSourceBiography, normalizeWrittenFullDate } from './wordSourceAccuracy.js';
-import { wordAlbumCandidates } from './wordImportAlbums.js';
+import { wordAlbumCandidates, type WordAlbumCandidate } from './wordImportAlbums.js';
 const FIELDS:Record<string,string>={
   'Name':'name','Birth Date':'birthDate','Birth Place':'birthPlace','Death Date':'deathDate',
   'Death Place':'deathPlace','Nationality':'nationality','Biography':'biography',
@@ -14,7 +14,7 @@ const FIELDS:Record<string,string>={
 const LIST_FIELDS=new Set(['soloists','performers']);
 export interface StructuredWordResult {
   composer:Record<string,unknown>;
-  albums:Array<Record<string,unknown>>;
+  albums:WordAlbumCandidate[];
   recordings:Array<Record<string,unknown>>;
   warnings:string[];
   sourceType:'structured-word';
