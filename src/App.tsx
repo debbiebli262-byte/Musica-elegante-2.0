@@ -3676,6 +3676,7 @@ function DiscogsImportPage() {
     setTitle(physicalCopy.title);
     setArtistName(physicalCopy.artist);
     setSelectedArtistNames([physicalCopy.artist]);
+    setAllArtistNames([]);
     setLabel(physicalCopy.label);
     setDiscogsLabelOptions([]);
     setFormats(physicalCopy.formats);
