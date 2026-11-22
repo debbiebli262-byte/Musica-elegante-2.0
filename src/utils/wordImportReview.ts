@@ -18,6 +18,10 @@ export interface ReviewedEdition extends WordAlbumCandidate {
   conflicts: ReviewConflict[];
   origin: Partial<Record<ReviewField, Origin>>;
   include: boolean;
+  discogsSuggestions?: Partial<Record<ReviewField,string>>;
+  discogsSuggestedImageUrl?: string;
+  discogsSuggestedDiscs?: Disc[];
+  discogsSuggestedDiscCount?: number;
 }
 export const editionKey = (album: WordAlbumCandidate, position: number) =>
   [album.catalogNumber || album.barcode || album.title, album.label, album.format, position].join('::').toLowerCase();
@@ -35,15 +39,15 @@ export function reviewDiscogsMatch(edition: ReviewedEdition, found: DiscogsRevie
     editionYear:found.year||'', country:found.country||''
   };
   const next={...edition,conflicts:[] as ReviewConflict[],origin:{...edition.origin},
-    discogsReleaseId:found.releaseId,imageUrl:found.imageUrl||edition.imageUrl,
-    discs:found.discs||edition.discs};
+    discogsReleaseId:found.releaseId,
+    discogsSuggestions:fields as Partial<Record<ReviewField,string>>,
+    discogsSuggestedImageUrl:found.imageUrl||'',
+    discogsSuggestedDiscs:found.discs||[],
+    discogsSuggestedDiscCount:found.discCount||0};
   for (const [field,value] of Object.entries(fields) as [ReviewField,string][]) {
     const current=String(next[field]||'');
     if (current && value && !similar(current,value)) {
       next.conflicts.push({field,word:current,discogs:value,resolved:false});
-    } else if (!current && value) {
-      (next as unknown as Record<string,unknown>)[field]=value;
-      next.origin[field]='Discogs';
     }
   }
   return next;
@@ -55,6 +59,21 @@ export function resolveReviewConflict(edition: ReviewedEdition, field: ReviewFie
     origin:{...edition.origin,[field]:prefer}};
   (next as unknown as Record<string,unknown>)[field]=prefer==='Discogs'?conflict.discogs:conflict.word;
   return next;
+}
+/** Apply a single proposed Discogs field; other Word fields remain unchanged. */
+export function applyDiscogsReviewField(edition:ReviewedEdition,field:ReviewField):ReviewedEdition {
+  const value=edition.discogsSuggestions?.[field];
+  if(!value)return edition;
+  const result=editReviewField(edition,field,value);
+  return {...result,origin:{...result.origin,[field]:'Discogs'}};
+}
+export function applyDiscogsReviewExtras(edition:ReviewedEdition,field:'image'|'discs'|'discCount'):ReviewedEdition {
+  if(field==='image')return edition.discogsSuggestedImageUrl?
+    {...edition,imageUrl:edition.discogsSuggestedImageUrl}:edition;
+  if(field==='discs')return edition.discogsSuggestedDiscs?.length?
+    {...edition,discs:edition.discogsSuggestedDiscs}:edition;
+  return edition.discogsSuggestedDiscCount && edition.discogsSuggestedDiscCount>0?
+    {...edition,discCount:edition.discogsSuggestedDiscCount}:edition;
 }
 export function editReviewField(edition: ReviewedEdition,field:ReviewField,value:string): ReviewedEdition {
   return {...edition,[field]:value,origin:{...edition.origin,[field]:'Manual' as const},

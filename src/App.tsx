@@ -12,8 +12,9 @@ import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
-import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
+import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, applyDiscogsReviewField, applyDiscogsReviewExtras, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
+import { makeDiscogsEditPreview, pickDiscogsChanges, DISCOGS_EDIT_FIELDS, type DiscogsEditPreview, type DiscogsEditKey } from './utils/discogsEditReview';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
@@ -3041,10 +3042,22 @@ function ImportWordPage() {
                                 editReviewField(item,field,event.target.value))}
                               className="w-full min-w-0 rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
                             <span className="block text-[10px] text-ink/40">Fuente: {candidate.origin[field]||'Sin identificar'}</span>
+                            {candidate.discogsSuggestions?.[field] && (
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gold/[0.08] p-2">
+                                <span className="text-[11px] text-ink/70 break-all">
+                                  Discogs: {candidate.discogsSuggestions[field]}
+                                </span>
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                  applyDiscogsReviewField(item,field))}
+                                  className="rounded-full border border-gold/30 px-3 py-1.5 text-[11px] font-bold hover:bg-white">
+                                  Usar este dato
+                                </button>
+                              </div>
+                            )}
                           </label>
                         ))}
                         <label className="space-y-1">
-                          <span className="text-xs font-medium text-ink/60">Sello original (histórico)</span>
+                          <span className="text-xs font-medium text-ink/60">Sello Original · primera edición histórica (no el sello de tu copia)</span>
                           <input value={candidate.originalLabel||''} onChange={event=>
                             updateReviewedEdition(key,item=>({...item,originalLabel:event.target.value}))}
                             className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"
@@ -3080,6 +3093,37 @@ function ImportWordPage() {
                             </div>
                           )}
                         </div>
+                      )}
+                      {candidate.discogsReleaseId && (
+                        <section className="rounded-xl border border-gold/20 bg-gold/[0.05] p-3 space-y-3">
+                          <h5 className="text-xs font-semibold uppercase tracking-widest text-gold">
+                            Otros datos disponibles en Discogs
+                          </h5>
+                          <p className="text-xs text-ink/60">
+                            Ninguno se aplica sin tu elección. El sello original nunca se completa por suposición.
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {candidate.discogsSuggestedImageUrl && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'image'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">Usar portada de Discogs</button>
+                            )}
+                            {Boolean(candidate.discogsSuggestedDiscCount) && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'discCount'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">
+                                Usar cantidad de discos ({candidate.discogsSuggestedDiscCount})
+                              </button>
+                            )}
+                            {Boolean(candidate.discogsSuggestedDiscs?.length) && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'discs'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">
+                                Usar lista de obras ({candidate.discogsSuggestedDiscs?.length} discos)
+                              </button>
+                            )}
+                          </div>
+                        </section>
                       )}
                       {existingEdition && (
                         <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
@@ -3977,15 +4021,24 @@ function DiscogsImportPage() {
                   <label htmlFor="import-sello" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">
                     Sello discográfico de tu ejemplar (no el original)
                   </label>
-                  {discogsLabelOptions.length > 1 ? (
-                    <select id="import-sello" value={label}
-                      onChange={e => { setLabel(e.target.value); }}
-                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
-                      <option value="">Seleccionar sello...</option>
-                      {discogsLabelOptions.map(item => <option key={item} value={item}>{item}</option>)}
-                    </select>
-                  ) : <input id="import-sello" value={label} onChange={e => { setLabel(e.target.value); }}
-                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3" />}
+                  <input id="import-sello" list="import-sellos-sugeridos" value={label}
+                    onChange={e => setLabel(e.target.value)}
+                    className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3"
+                    placeholder="Seleccionar o escribir el sello de tu ejemplar"/>
+                  <datalist id="import-sellos-sugeridos">
+                    {discogsLabelOptions.map(item => <option key={item} value={item}/>)}
+                  </datalist>
+                  <p className="text-xs text-ink/50">
+                    Corresponde a la edición que tienes en casa. Puedes corregirlo manualmente;
+                    no altera el Sello Original.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original · primera edición histórica</label>
+                  <input value={originalLabel} onChange={e=>setOriginalLabel(e.target.value)}
+                    className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3"
+                    placeholder="Desconocido: dejar en blanco"/>
+                  <p className="text-xs text-ink/50">No se deduce del sello de la reedición ni se copia desde Discogs automáticamente.</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Mi colección</label>
@@ -4011,7 +4064,7 @@ function DiscogsImportPage() {
                   <Field label="País" value={country} setValue={setCountry}/>
                   <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber}/>
                   <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber}/>
-                  <Field label="Sello original (si se conoce)" value={originalLabel} setValue={setOriginalLabel}/>
+
                   <Field label="Año original" value={originalYear} setValue={setOriginalYear}/>
                   <Field label="Fecha edición" value={editionDate} setValue={setEditionDate}/>
                   <div className="space-y-2">
@@ -5492,6 +5545,11 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [uploadProgress, setUploadProgress] = useState(0);
   const [sidemenIds, setSidemenIds] = useState<string[]>(album?.sidemenIds || []);
   const [isFetchingDiscogs, setIsFetchingDiscogs] = useState(false);
+  const [discogsPreview, setDiscogsPreview] = useState<DiscogsEditPreview | null>(null);
+  const [discogsChoices, setDiscogsChoices] = useState<Record<string,boolean>>({});
+  const [discogsReviewError, setDiscogsReviewError] = useState('');
+  const [discogsReleaseLoading, setDiscogsReleaseLoading] = useState(false);
+
   const [discogsSearchMode, setDiscogsSearchMode] = useState<'catno' | 'barcode'>('catno');
   const [barcodeNumber, setBarcodeNumber] = useState('');
   const [discogsUrl, setDiscogsUrl] = useState('');
@@ -5632,107 +5690,68 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         throw new Error(data?.error || 'No se pudo buscar en Discogs.');
       }
 
-      if (data.title) setTitle(data.title);
-      if (data.year) {
-        const yearText = String(data.year);
-        setReleaseYear(yearText);
-        setEditionDate((current) => current || yearText);
-      }
-      if (data.country) setCountry(data.country);
-      const labelOptions = getDiscogsLabelOptions(data.label);
-      setDiscogsLabelOptions(labelOptions);
-      if (labelOptions.length) {
-        const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
-        setLabel(onlyLabel);
-        setOriginalLabel(onlyLabel);
-      }
-      if (data.catno) {
-        setCatalogNumber(data.catno);
-        setEditionCatalogNumber((current) => current || data.catno);
-      }
-      if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
-      if (data.originalYear) setOriginalYear(String(data.originalYear));
-      if (data.orchestra) setOrchestra(data.orchestra);
-      if (data.conductor) setConductor(data.conductor);
-      if (data.producer) setProducer(data.producer);
-      if (data.engineer) setEngineer(data.engineer);
-      if (data.masteringEngineer) setMasteringEngineer(data.masteringEngineer);
-
-      if (typeof data.discCount === 'number' && data.discCount > 0) {
-        setDiscCount(data.discCount);
-      }
-
-      if (data.format) {
-        const normalizedFormats = String(data.format)
-          .split(',')
-          .map((item: string) => item.trim())
-          .filter(Boolean)
-          .map((item: string) => {
-            const lower = item.toLowerCase();
-            if (lower.includes('cd')) return 'CD';
-            if (lower.includes('vinyl') || lower.includes('lp')) return 'Vinilo';
-            if (lower.includes('dvd')) return 'DVD';
-            if (lower.includes('blu-ray') || lower.includes('bluray')) return 'Bluray';
-            return null;
-          })
-          .filter(Boolean) as ('CD' | 'Vinilo' | 'DVD' | 'Bluray')[];
-        if (normalizedFormats.length) setFormats([...new Set(normalizedFormats)]);
-      }
-
-      if (data.coverImage || data.thumb) setImageUrl(data.coverImage || data.thumb);
-      if (data.discogsUrl) setDiscogsUrl(data.discogsUrl);
-
-      // Store all artist names from this release for multi-artist linking
-      if (Array.isArray(data.allArtistNames) && data.allArtistNames.length > 0) {
-        // We store names here; IDs will be resolved on save by looking up each name in Firestore
-        (window as any).__discogsAllArtistNames = data.allArtistNames;
-      }
-
-      if (genre === 'classical') {
-        if (Array.isArray(data.discs) && data.discs.length > 0) {
-          setDiscs(data.discs);
-        } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-          setDiscs([{
-            discNumber: 1,
-            works: [{
-              title: 'Tracklist',
-              movements: data.rawTracklist
-                .filter((item: any) => item?.title && item?.type_ !== 'heading')
-                .map((item: any, index: number) => ({
-                  trackNumber: index + 1,
-                  title: item.title,
-                  duration: item.duration || '',
-                })),
-            }],
-          }]);
-        }
-      } else {
-        if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-          setTracks(data.tracks);
-        } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-          setTracks(
-            data.rawTracklist
-              .filter((item: any) => item?.title && item?.type_ !== 'heading')
-              .map((item: any, index: number) => ({
-                trackNumber: index + 1,
-                title: item.title,
-                duration: item.duration || '',
-              }))
-          );
-        }
-      }
-
-      const artistCount = Array.isArray(data.allArtistNames) ? data.allArtistNames.length : 0;
-      const msg = artistCount > 1
-        ? `Datos cargados. Este disco incluye ${artistCount} artistas: ${data.allArtistNames.join(', ')}. Al guardar, el álbum aparecerá en todos ellos.`
-        : 'Datos cargados desde Discogs.';
-      alert(msg);
+      // Show the information as a proposal. Never overwrite an existing field on search.
+      const review=makeDiscogsEditPreview(data,Array.isArray(data.candidates)?data.candidates:[]);
+      setDiscogsPreview(review);
+      setDiscogsChoices({});
+      setDiscogsReviewError('');
     } catch (error: any) {
       console.error('Discogs fetch error:', error);
       alert(error.message || 'No se pudo obtener información desde Discogs.');
     } finally {
       setIsFetchingDiscogs(false);
     }
+  };
+
+  const selectDiscogsRelease = async (releaseId:string) => {
+    if (!releaseId || !/^\\d+$/.test(releaseId)) return;
+    setDiscogsReleaseLoading(true);
+    setDiscogsReviewError('');
+    try {
+      const response=await privateApiFetch('/api/discogs-search-by-catalog?releaseId='+encodeURIComponent(releaseId));
+      const data=await response.json();
+      if(!response.ok)throw new Error(data?.error||'No se pudo obtener la edición.');
+      const candidates=discogsPreview?.candidates||[];
+      const proposal=makeDiscogsEditPreview(data,candidates);
+      setDiscogsPreview(proposal);
+      setDiscogsChoices({});
+    } catch(error) {
+      setDiscogsReviewError(error instanceof Error?error.message:String(error));
+    } finally {setDiscogsReleaseLoading(false);}
+  };
+
+  const applySelectedDiscogsFields = () => {
+    if(!discogsPreview)return;
+    const proposed=pickDiscogsChanges(discogsPreview,discogsChoices);
+    const fields=proposed.fields;
+    if(fields.title!==undefined)setTitle(fields.title);
+    if(fields.releaseYear!==undefined)setReleaseYear(fields.releaseYear);
+    if(fields.country!==undefined)setCountry(fields.country);
+    if(fields.label!==undefined)setLabel(fields.label);
+    if(fields.catalogNumber!==undefined)setCatalogNumber(fields.catalogNumber);
+    if(fields.editionDate!==undefined)setEditionDate(fields.editionDate);
+    if(fields.editionCatalogNumber!==undefined)setEditionCatalogNumber(fields.editionCatalogNumber);
+    if(fields.releaseDate!==undefined)setReleaseDate(fields.releaseDate);
+    if(fields.imageUrl!==undefined)setImageUrl(fields.imageUrl);
+    if(fields.orchestra!==undefined)setOrchestra(fields.orchestra);
+    if(fields.conductor!==undefined)setConductor(fields.conductor);
+    if(fields.producer!==undefined)setProducer(fields.producer);
+    if(fields.engineer!==undefined)setEngineer(fields.engineer);
+    if(fields.masteringEngineer!==undefined)setMasteringEngineer(fields.masteringEngineer);
+    if(proposed.formats!==undefined)setFormats(proposed.formats);
+    if(proposed.discCount!==undefined)setDiscCount(proposed.discCount);
+    if(proposed.tracks!==undefined && proposed.discs!==undefined) {
+      if(genre==='classical')setDiscs(proposed.discs);
+      else setTracks(proposed.tracks);
+    }
+    if(proposed.artistNames?.length) {
+      (window as any).__discogsAllArtistNames=proposed.artistNames;
+    }
+    if(discogsPreview.discogsUrl)setDiscogsUrl(discogsPreview.discogsUrl);
+    setDiscogsPreview(null);
+    setDiscogsChoices({});
+    setDiscogsReviewError('');
+    // A release label has no bearing on the original historical label.
   };
 
   const resolveImage = async () => {
@@ -7037,7 +7056,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                   <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Editor</label>
                   {discogsLabelOptions.length > 1 && (
                     <select aria-label="Selecciona el sello de tu edición" value={discogsLabelOptions.includes(label) ? label : ''}
-                      onChange={event => { setLabel(event.target.value); setOriginalLabel(event.target.value); }}
+                      onChange={event => setLabel(event.target.value)}
                       className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
                       <option value="">Selecciona el sello correcto...</option>
                       {discogsLabelOptions.map(option => <option key={option} value={option}>{option}</option>)}
@@ -7100,6 +7119,103 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                     </button>
                   </div>
 
+                  {discogsPreview && (
+                    <section className="mt-4 rounded-2xl border border-gold/30 bg-gold/[0.06] p-4 space-y-4">
+                      <div className="flex flex-wrap justify-between items-start gap-3">
+                        <div>
+                          <h4 className="font-serif text-xl">Revisar datos de Discogs</h4>
+                          <p className="text-xs text-ink/60 mt-1">
+                            No se ha cambiado nada en el álbum. Marca solamente los datos que quieras copiar
+                            y edítalos aquí antes de aplicarlos.
+                          </p>
+                        </div>
+                        <button type="button" onClick={()=>{setDiscogsPreview(null);setDiscogsChoices({});}}
+                          className="text-xs underline text-ink/60">Descartar propuesta</button>
+                      </div>
+                      {discogsPreview.candidates.length>0 && (
+                        <label className="block space-y-1">
+                          <span className="text-xs font-semibold text-ink/60">Edición exacta de Discogs</span>
+                          <select value={discogsPreview.releaseId||''} disabled={discogsReleaseLoading}
+                            onChange={event=>selectDiscogsRelease(event.target.value)}
+                            className="w-full min-w-0 rounded-xl border border-ink/10 bg-white px-3 py-3 text-sm">
+                            <option value="">Selecciona la edición...</option>
+                            {discogsPreview.candidates.map(item=>(
+                              <option key={item.id} value={item.id}>
+                                {item.title} · {item.year||'s/f'} · {item.labels.join(', ')} · {item.catno} · {item.formats.join('/')}
+                              </option>
+                            ))}
+                          </select>
+                          {discogsReleaseLoading && <span className="text-xs text-ink/50">Cargando edición...</span>}
+                        </label>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {DISCOGS_EDIT_FIELDS.map(field=>(
+                          <div key={field.key} className="rounded-xl border border-ink/10 bg-white p-3 space-y-2 min-w-0">
+                            <label className="flex items-center gap-2 text-xs font-semibold">
+                              <input type="checkbox" checked={Boolean(discogsChoices[field.key])}
+                                onChange={event=>setDiscogsChoices(current=>({...current,[field.key]:event.target.checked}))}/>
+                              {field.label}
+                            </label>
+                            <input value={discogsPreview.fields[field.key]}
+                              aria-label={'Valor de Discogs: '+field.label}
+                              onChange={event=>setDiscogsPreview(current=>current?{
+                                ...current,fields:{...current.fields,[field.key]:event.target.value}}:current)}
+                              className="w-full min-w-0 rounded-lg bg-ink/[0.035] px-3 py-2 text-sm"/>
+                          </div>
+                        ))}
+                        <div className="rounded-xl border border-ink/10 bg-white p-3 space-y-2">
+                          <label className="flex gap-2 items-center text-xs font-semibold">
+                            <input type="checkbox" checked={Boolean(discogsChoices.formats)}
+                              onChange={event=>setDiscogsChoices(current=>({...current,formats:event.target.checked}))}/>
+                            Formato de esta edición
+                          </label>
+                          <select value={discogsPreview.formats[0]||''}
+                            onChange={event=>setDiscogsPreview(current=>current?{
+                              ...current,formats:event.target.value?[event.target.value as 'CD'|'Vinilo'|'DVD'|'Bluray']:[]}:current)}
+                            className="w-full rounded-lg bg-ink/[0.035] p-2 text-sm">
+                            <option value="">Sin identificar</option>
+                            <option value="CD">CD</option>
+                            <option value="Vinilo">Vinilo</option>
+                            <option value="DVD">DVD</option>
+                            <option value="Bluray">Bluray</option>
+                          </select>
+                        </div>
+                        <div className="rounded-xl border border-ink/10 bg-white p-3 space-y-2">
+                          <label className="flex gap-2 items-center text-xs font-semibold">
+                            <input type="checkbox" checked={Boolean(discogsChoices.discCount)}
+                              onChange={event=>setDiscogsChoices(current=>({...current,discCount:event.target.checked}))}/>
+                            Cantidad de discos
+                          </label>
+                          <input type="number" min="1" value={discogsPreview.discCount}
+                            onChange={event=>setDiscogsPreview(current=>current?{
+                              ...current,discCount:Math.max(1,Number(event.target.value)||1)}:current)}
+                            className="w-full rounded-lg bg-ink/[0.035] p-2 text-sm"/>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-3 rounded-xl bg-white p-3">
+                        <label className="flex gap-2 items-center text-sm">
+                          <input type="checkbox" checked={Boolean(discogsChoices.tracklist)}
+                            onChange={event=>setDiscogsChoices(current=>({...current,tracklist:event.target.checked}))}/>
+                          Copiar lista de pistas / obras ({genre==='classical'?discogsPreview.discs.length:discogsPreview.tracks.length})
+                        </label>
+                        <label className="flex gap-2 items-center text-sm">
+                          <input type="checkbox" checked={Boolean(discogsChoices.artists)}
+                            onChange={event=>setDiscogsChoices(current=>({...current,artists:event.target.checked}))}/>
+                          Vincular artistas detectados ({discogsPreview.artistNames.length})
+                        </label>
+                      </div>
+                      <p className="text-xs text-ink/60">
+                        <strong>Sello Editor</strong> = sello de esta copia. <strong>Sello Original</strong> = primera edición histórica:
+                        Discogs no lo cambiará ni lo deducirá automáticamente.
+                      </p>
+                      {discogsReviewError&&<p role="alert" className="text-sm text-red-600">{discogsReviewError}</p>}
+                      <button type="button" onClick={applySelectedDiscogsFields} disabled={discogsReleaseLoading||
+                        !Object.values(discogsChoices).some(Boolean)}
+                        className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white disabled:opacity-40">
+                        Aplicar sólo los campos marcados
+                      </button>
+                    </section>
+                  )}
                   {discogsUrl && (
                     <p className="text-xs text-ink/50">
                       Datos de Discogs.{" "}
