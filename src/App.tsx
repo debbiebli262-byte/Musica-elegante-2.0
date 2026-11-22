@@ -2245,6 +2245,17 @@ async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
 
 function ImportWordPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [batchResults, setBatchResults] = useState<Array<{file:File;data:ParsedWordImport|null;error:string}>>([]);
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
+  const [reviewedEditions, setReviewedEditions] = useState<ReviewedEdition[]>([]);
+  const [existingArtist, setExistingArtist] = useState<Artist | null>(null);
+  const [biographyChoice, setBiographyChoice] = useState<'keep'|'replace'|'edit'>('keep');
+  const [biographyDraft, setBiographyDraft] = useState('');
+  const [backupReady, setBackupReady] = useState(false);
+  const [backupDetails, setBackupDetails] = useState('');
+  const [activeJobId, setActiveJobId] = useState('');
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [parsedData, setParsedData] = useState<ParsedWordImport | null>(null);
   const [recentImports, setRecentImports] = useState<ImportJobRecord[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -2263,7 +2274,24 @@ function ImportWordPage() {
   const [enrichMessage, setEnrichMessage] = useState('');
   const [batchSearching, setBatchSearching] = useState(false);
   const extractedCandidates = wordAlbumCandidates(parsedData?.albums || [], parsedData?.recordings || []);
-  const albumsForImport = extractedCandidates.map(item => enrichedWordAlbums[normalizedEditionKey(item)] || item);
+  const albumsForImport = reviewedEditions;
+  const markReviewChanged = () => { setBackupReady(false); setBackupDetails(''); };
+  const updateReviewedEdition = (key:string, change:(edition:ReviewedEdition)=>ReviewedEdition) => {
+    setReviewedEditions(current=>current.map(item=>item.sourceKey===key?change(item):item));
+    markReviewChanged();
+  };
+  const setActiveParsed = (result:ParsedWordImport|null, editions?:ReviewedEdition[]) => {
+    setParsedData(result);
+    setReviewedEditions(editions || (result?wordAlbumCandidates(result.albums||[],result.recordings||[]).map(makeReview):[]));
+    setExistingArtist(null);
+    setBiographyChoice('keep');
+    setBiographyDraft(result?.composer?.biography||'');
+    setDiscogsMatches({});
+    setDiscogsSelection({});
+    setEnrichedWordAlbums({});
+    setBackupReady(false);
+    setBackupDetails('');
+  };
 
   useEffect(() => {
     const importsQuery = query(collection(db, 'import_jobs'));
@@ -2278,35 +2306,59 @@ function ImportWordPage() {
   }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] || null;
-    setSelectedFile(file);
-    setParsedData(null);
-    setMessage('');
-    setDiscogsMatches({});
-    setDiscogsSelection({});
-    setEnrichedWordAlbums({});
+    const files = Array.from(event.target.files || []);
+    const valid = files.filter(file=>file.name.toLowerCase().endsWith('.docx') && file.size <= 8*1024*1024);
+    setPendingFiles(valid);
+    setSelectedFile(valid[0]||null);
+    setCurrentBatchIndex(0);
+    setBatchResults([]);
+    setActiveJobId('');
+    setActiveParsed(null);
+    setMessage(valid.length!==files.length?'Sólo se admiten .docx de hasta 8 MB. Se omitieron archivos no válidos.':'');
     setEnrichMessage('');
   };
 
   const handleProcessFile = async () => {
-    if (!selectedFile) {
-      setMessage('Selecciona un archivo .docx antes de continuar.');
+    if (!pendingFiles.length) {
+      setMessage('Selecciona uno o varios archivos .docx antes de continuar.');
       return;
     }
-
-    setIsUploading(true);
-    setMessage('');
-
-    try {
-      const result = await uploadWordDocument(selectedFile);
-      setParsedData(result);
-      setMessage('Archivo procesado. Revisa los datos antes de guardarlos.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'No se pudo procesar el archivo.');
-    } finally {
-      setIsUploading(false);
+    setIsUploading(true);setIsBatchProcessing(true);setMessage('');
+    const results:Array<{file:File;data:ParsedWordImport|null;error:string}>=[];
+    for(const [index,file] of pendingFiles.entries()){
+      setMessage(`Procesando archivo ${index+1}/${pendingFiles.length}: ${file.name}`);
+      try {
+        const data=await uploadWordDocument(file);
+        results.push({file,data,error:''});
+      }catch(error){
+        results.push({file,data:null,error:error instanceof Error?error.message:String(error)});
+      }
     }
+    setBatchResults(results);
+    const first=results.findIndex(item=>Boolean(item.data));
+    if(first>=0){
+      setCurrentBatchIndex(first);setSelectedFile(results[first].file);
+      setActiveParsed(results[first].data);
+    }
+    setMessage(`${results.filter(r=>r.data).length}/${results.length} archivo(s) procesados. Revisa y aprueba cada documento por separado.`);
+    setIsUploading(false);setIsBatchProcessing(false);
   };
+  const activateBatch = (index:number)=>{
+    const item=batchResults[index];
+    if(!item)return;
+    setCurrentBatchIndex(index);setSelectedFile(item.file);setActiveJobId('');
+    setActiveParsed(item.data);
+    setMessage(item.error||`Revisando ${item.file.name}`);
+  };
+  useEffect(()=>{
+    const name=parsedData?.composer?.name?.trim();
+    if(!name){setExistingArtist(null);return;}
+    let active=true;
+    getArtistByName(name).then(artist=>{
+      if(active) setExistingArtist(artist||null);
+    }).catch(()=>{if(active)setMessage('No se pudo comprobar si el artista ya existe; no guardes hasta revisar la conexión.');});
+    return()=>{active=false};
+  },[parsedData?.composer?.name]);
 
   const lookupWordAlbum = async (album: WordAlbumCandidate) => {
     const key = normalizedEditionKey(album);
