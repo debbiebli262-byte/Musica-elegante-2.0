@@ -5638,107 +5638,68 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
         throw new Error(data?.error || 'No se pudo buscar en Discogs.');
       }
 
-      if (data.title) setTitle(data.title);
-      if (data.year) {
-        const yearText = String(data.year);
-        setReleaseYear(yearText);
-        setEditionDate((current) => current || yearText);
-      }
-      if (data.country) setCountry(data.country);
-      const labelOptions = getDiscogsLabelOptions(data.label);
-      setDiscogsLabelOptions(labelOptions);
-      if (labelOptions.length) {
-        const onlyLabel = labelOptions.length === 1 ? labelOptions[0] : '';
-        setLabel(onlyLabel);
-        setOriginalLabel(onlyLabel);
-      }
-      if (data.catno) {
-        setCatalogNumber(data.catno);
-        setEditionCatalogNumber((current) => current || data.catno);
-      }
-      if (data.originalCatalogNumber) setOriginalCatalogNumber(data.originalCatalogNumber);
-      if (data.originalYear) setOriginalYear(String(data.originalYear));
-      if (data.orchestra) setOrchestra(data.orchestra);
-      if (data.conductor) setConductor(data.conductor);
-      if (data.producer) setProducer(data.producer);
-      if (data.engineer) setEngineer(data.engineer);
-      if (data.masteringEngineer) setMasteringEngineer(data.masteringEngineer);
-
-      if (typeof data.discCount === 'number' && data.discCount > 0) {
-        setDiscCount(data.discCount);
-      }
-
-      if (data.format) {
-        const normalizedFormats = String(data.format)
-          .split(',')
-          .map((item: string) => item.trim())
-          .filter(Boolean)
-          .map((item: string) => {
-            const lower = item.toLowerCase();
-            if (lower.includes('cd')) return 'CD';
-            if (lower.includes('vinyl') || lower.includes('lp')) return 'Vinilo';
-            if (lower.includes('dvd')) return 'DVD';
-            if (lower.includes('blu-ray') || lower.includes('bluray')) return 'Bluray';
-            return null;
-          })
-          .filter(Boolean) as ('CD' | 'Vinilo' | 'DVD' | 'Bluray')[];
-        if (normalizedFormats.length) setFormats([...new Set(normalizedFormats)]);
-      }
-
-      if (data.coverImage || data.thumb) setImageUrl(data.coverImage || data.thumb);
-      if (data.discogsUrl) setDiscogsUrl(data.discogsUrl);
-
-      // Store all artist names from this release for multi-artist linking
-      if (Array.isArray(data.allArtistNames) && data.allArtistNames.length > 0) {
-        // We store names here; IDs will be resolved on save by looking up each name in Firestore
-        (window as any).__discogsAllArtistNames = data.allArtistNames;
-      }
-
-      if (genre === 'classical') {
-        if (Array.isArray(data.discs) && data.discs.length > 0) {
-          setDiscs(data.discs);
-        } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-          setDiscs([{
-            discNumber: 1,
-            works: [{
-              title: 'Tracklist',
-              movements: data.rawTracklist
-                .filter((item: any) => item?.title && item?.type_ !== 'heading')
-                .map((item: any, index: number) => ({
-                  trackNumber: index + 1,
-                  title: item.title,
-                  duration: item.duration || '',
-                })),
-            }],
-          }]);
-        }
-      } else {
-        if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-          setTracks(data.tracks);
-        } else if (Array.isArray(data.rawTracklist) && data.rawTracklist.length > 0) {
-          setTracks(
-            data.rawTracklist
-              .filter((item: any) => item?.title && item?.type_ !== 'heading')
-              .map((item: any, index: number) => ({
-                trackNumber: index + 1,
-                title: item.title,
-                duration: item.duration || '',
-              }))
-          );
-        }
-      }
-
-      const artistCount = Array.isArray(data.allArtistNames) ? data.allArtistNames.length : 0;
-      const msg = artistCount > 1
-        ? `Datos cargados. Este disco incluye ${artistCount} artistas: ${data.allArtistNames.join(', ')}. Al guardar, el álbum aparecerá en todos ellos.`
-        : 'Datos cargados desde Discogs.';
-      alert(msg);
+      // Show the information as a proposal. Never overwrite an existing field on search.
+      const review=makeDiscogsEditPreview(data,Array.isArray(data.candidates)?data.candidates:[]);
+      setDiscogsPreview(review);
+      setDiscogsChoices({});
+      setDiscogsReviewError('');
     } catch (error: any) {
       console.error('Discogs fetch error:', error);
       alert(error.message || 'No se pudo obtener información desde Discogs.');
     } finally {
       setIsFetchingDiscogs(false);
     }
+  };
+
+  const selectDiscogsRelease = async (releaseId:string) => {
+    if (!releaseId || !/^\\d+$/.test(releaseId)) return;
+    setDiscogsReleaseLoading(true);
+    setDiscogsReviewError('');
+    try {
+      const response=await privateApiFetch('/api/discogs-search-by-catalog?releaseId='+encodeURIComponent(releaseId));
+      const data=await response.json();
+      if(!response.ok)throw new Error(data?.error||'No se pudo obtener la edición.');
+      const candidates=discogsPreview?.candidates||[];
+      const proposal=makeDiscogsEditPreview(data,candidates);
+      setDiscogsPreview(proposal);
+      setDiscogsChoices({});
+    } catch(error) {
+      setDiscogsReviewError(error instanceof Error?error.message:String(error));
+    } finally {setDiscogsReleaseLoading(false);}
+  };
+
+  const applySelectedDiscogsFields = () => {
+    if(!discogsPreview)return;
+    const proposed=pickDiscogsChanges(discogsPreview,discogsChoices);
+    const fields=proposed.fields;
+    if(fields.title!==undefined)setTitle(fields.title);
+    if(fields.releaseYear!==undefined)setReleaseYear(fields.releaseYear);
+    if(fields.country!==undefined)setCountry(fields.country);
+    if(fields.label!==undefined)setLabel(fields.label);
+    if(fields.catalogNumber!==undefined)setCatalogNumber(fields.catalogNumber);
+    if(fields.editionDate!==undefined)setEditionDate(fields.editionDate);
+    if(fields.editionCatalogNumber!==undefined)setEditionCatalogNumber(fields.editionCatalogNumber);
+    if(fields.releaseDate!==undefined)setReleaseDate(fields.releaseDate);
+    if(fields.imageUrl!==undefined)setImageUrl(fields.imageUrl);
+    if(fields.orchestra!==undefined)setOrchestra(fields.orchestra);
+    if(fields.conductor!==undefined)setConductor(fields.conductor);
+    if(fields.producer!==undefined)setProducer(fields.producer);
+    if(fields.engineer!==undefined)setEngineer(fields.engineer);
+    if(fields.masteringEngineer!==undefined)setMasteringEngineer(fields.masteringEngineer);
+    if(proposed.formats!==undefined)setFormats(proposed.formats);
+    if(proposed.discCount!==undefined)setDiscCount(proposed.discCount);
+    if(proposed.tracks!==undefined && proposed.discs!==undefined) {
+      if(genre==='classical')setDiscs(proposed.discs);
+      else setTracks(proposed.tracks);
+    }
+    if(proposed.artistNames?.length) {
+      (window as any).__discogsAllArtistNames=proposed.artistNames;
+    }
+    if(discogsPreview.discogsUrl)setDiscogsUrl(discogsPreview.discogsUrl);
+    setDiscogsPreview(null);
+    setDiscogsChoices({});
+    setDiscogsReviewError('');
+    // A release label has no bearing on the original historical label.
   };
 
   const resolveImage = async () => {
