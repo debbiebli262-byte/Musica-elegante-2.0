@@ -2360,8 +2360,8 @@ function ImportWordPage() {
     return()=>{active=false};
   },[parsedData?.composer?.name]);
 
-  const lookupWordAlbum = async (album: WordAlbumCandidate) => {
-    const key = normalizedEditionKey(album);
+  const lookupWordAlbum = async (album: ReviewedEdition) => {
+    const key = album.sourceKey;
     const identifier = album.barcode || album.catalogNumber;
     if (!identifier) {
       setEnrichMessage('El álbum necesita un código de barras o número de catálogo para buscar en Discogs.');
@@ -2376,9 +2376,8 @@ function ImportWordPage() {
       if (!response.ok) throw new Error(result?.error || 'No se encontró en Discogs.');
       const candidates = (Array.isArray(result.candidates) ? result.candidates : []).filter((item: {labels:string[];formats:string[]}) => {
         const labelMatch = !album.label || item.labels.some(label => label.toLowerCase() === album.label.toLowerCase());
-        const documentFormat = album.format.toLowerCase();
-        const formatMatch = !documentFormat || item.formats.some(format =>
-          format.toLowerCase().includes(documentFormat) || documentFormat.includes(format.toLowerCase()));
+        const documentFormat = normalizePhysicalFormat(album.format);
+        const formatMatch = !documentFormat || item.formats.some(format => normalizePhysicalFormat(format) === documentFormat);
         return labelMatch && formatMatch;
       });
       setDiscogsMatches(current => ({...current, [key]: candidates}));
@@ -2392,7 +2391,7 @@ function ImportWordPage() {
   };
 
   const searchAllWordAlbums = async () => {
-    const searchables = extractedCandidates.filter(album => album.barcode || album.catalogNumber);
+    const searchables = reviewedEditions.filter(album => album.include && (album.barcode || album.catalogNumber));
     if (!searchables.length) {
       setEnrichMessage('No hay números de catálogo ni códigos de barras para buscar.');
       return;
@@ -2410,8 +2409,8 @@ function ImportWordPage() {
     }
   };
 
-  const confirmWordDiscogsRelease = async (album: WordAlbumCandidate) => {
-    const key = normalizedEditionKey(album);
+  const confirmWordDiscogsRelease = async (album: ReviewedEdition) => {
+    const key = album.sourceKey;
     const releaseId = discogsSelection[key];
     if (!releaseId || !discogsMatches[key]?.some(item => String(item.id) === releaseId)) return;
     setEnrichingAlbum(key);
@@ -2420,27 +2419,20 @@ function ImportWordPage() {
       const response = await privateApiFetch('/api/discogs-search-by-catalog?releaseId=' + encodeURIComponent(releaseId));
       const found = await response.json();
       if (!response.ok) throw new Error(found?.error || 'No se pudo cargar la edición.');
-      if (album.catalogNumber && found.catno &&
-          album.catalogNumber.replace(/[\s-]/g, '').toLowerCase() !==
-          String(found.catno).replace(/[\s-]/g, '').toLowerCase()) {
-        throw new Error('El número de catálogo no coincide con el documento. Revisa la edición.');
+      const selectedCandidate=discogsMatches[key].find(item=>String(item.id)===releaseId);
+      if(!selectedCandidate)throw new Error('La edición no está entre las opciones verificadas.');
+      const releaseFormat=selectedCandidate.formats.map(normalizePhysicalFormat).find(Boolean);
+      if(album.format && releaseFormat && normalizePhysicalFormat(album.format)!==releaseFormat) {
+        throw new Error('El formato elegido no coincide con el ejemplar del Word. Selecciona la edición correcta.');
       }
-      setEnrichedWordAlbums(current => ({...current, [key]: {
-        ...album,
-        title: album.title || found.title || '',
-        label: album.label || String(found.label || '').split(',')[0].trim(),
-        catalogNumber: album.catalogNumber || found.catno || '',
-        editionYear: album.editionYear || String(found.year || ''),
-        country: album.country || found.country || '',
-        discCount: album.discCount || found.discCount || 1,
-        imageUrl: found.coverImage || found.thumb || '',
-        discogsReleaseId: Number(releaseId),
-        discs: Array.isArray(found.discs) ? found.discs : [],
-        tracks: Array.isArray(found.tracks) ? found.tracks : [],
-        producer: found.producer || '', engineer: found.engineer || '',
-        orchestra: found.orchestra || '', conductor: found.conductor || '',
-      }}));
-      setEnrichMessage('Edición verificada en Discogs. Los datos del Word tienen prioridad.');
+      updateReviewedEdition(key,current=>reviewDiscogsMatch(current,{
+        releaseId:Number(releaseId),
+        title:found.title||'',label:String(found.label||'').split(',')[0].trim(),
+        catno:found.catno||'',year:String(found.year||''),country:found.country||'',
+        imageUrl:found.coverImage||found.thumb||'',discCount:found.discCount,
+        discs:Array.isArray(found.discs)?found.discs:[]
+      }));
+      setEnrichMessage('Discogs contrastado. Resuelve los campos contradictorios antes de guardar.');
     } catch (error) {
       setEnrichMessage(error instanceof Error ? error.message : String(error));
     } finally {
