@@ -7,7 +7,7 @@ const FIELDS:Record<string,string>={
   'Opus':'opus','Composition Date':'compositionDate','Premiere Date':'premiereDate',
   'Soloists':'soloists','Performers':'performers','Orchestra':'orchestra','Conductor':'conductor',
   'Choir':'choir','Recording Date':'recordingDate','Recording Location':'recordingLocation',
-  'Album Title':'albumTitle','Album Subtitle':'albumSubtitle','Label':'label',
+  'Album Title':'albumTitle','Album Subtitle':'albumSubtitle','Label':'label','Original Label':'originalLabel',
   'Catalog Number':'catalogNumber','Barcode':'barcode','Format':'format',
   'Edition Year':'editionYear','Country':'country','Notes':'notes','Disc Number':'discNumber'
 };
