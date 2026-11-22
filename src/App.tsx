@@ -2257,6 +2257,7 @@ function ImportWordPage() {
   const [backupDetails, setBackupDetails] = useState('');
   const [activeJobId, setActiveJobId] = useState('');
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [restorePreview, setRestorePreview] = useState<{artist:Artist|null;albums:Album[]}|null>(null);
   const [parsedData, setParsedData] = useState<ParsedWordImport | null>(null);
   const [recentImports, setRecentImports] = useState<ImportJobRecord[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -2524,6 +2525,60 @@ function ImportWordPage() {
     }
   };
 
+  const readRestoreBackup = async (event: React.ChangeEvent<HTMLInputElement>)=>{
+    const file=event.target.files?.[0];
+    setRestorePreview(null);
+    if(!file)return;
+    if(file.size>5*1024*1024){setMessage('El backup JSON supera 5 MB; no se ha cargado.');return;}
+    try{
+      const json=JSON.parse(await file.text()) as Record<string,unknown>;
+      const artist=json.existingArtist;
+      const albums=json.matchingExistingAlbums;
+      if(!Array.isArray(albums)||albums.length>300 ||
+         albums.some(item=>!item||typeof item!=='object'||typeof item.id!=='string'||
+           !item.id||item.id.includes('/')||typeof item.title!=='string'||
+           typeof item.artistId!=='string'||!['classical','jazz'].includes(item.genre)) ||
+         (artist!=null && (typeof artist!=='object'||typeof (artist as Artist).id!=='string'||
+           typeof (artist as Artist).name!=='string'||(artist as Artist).id.includes('/')))){
+        throw new Error('El archivo no contiene una copia válida creada por esta pantalla.');
+      }
+      setRestorePreview({artist:artist as Artist|null,albums:albums as Album[]});
+      setMessage('Backup verificado: se restaurarán únicamente fichas ausentes, nunca se sobrescribirán fichas existentes.');
+    }catch(error){setMessage('No se pudo leer el backup: '+(error instanceof Error?error.message:String(error)));}
+    event.target.value='';
+  };
+  const restoreMissingFromBackup = async () => {
+    if(!restorePreview||isApproving)return;
+    if(!window.confirm('¿Restaurar sólo los registros faltantes de este backup? Los datos actuales jamás serán reemplazados.'))return;
+    setIsApproving(true);
+    let restored=0,skipped=0;
+    try{
+      const entries:Array<{collectionName:'artists'|'albums';id:string;data:Record<string,unknown>}>=[];
+      if(restorePreview.artist)entries.push({
+        collectionName:'artists',id:restorePreview.artist.id,
+        data:{...restorePreview.artist}
+      });
+      for(const album of restorePreview.albums)entries.push({
+        collectionName:'albums',id:album.id,data:{...album}
+      });
+      for(const entry of entries){
+        const reference=doc(db,entry.collectionName,entry.id);
+        const created=await runTransaction(db,async tx=>{
+          if((await tx.get(reference)).exists())return false;
+          const {id,...data}=entry.data;
+          tx.set(reference,data);
+          return true;
+        });
+        if(created)restored++;else skipped++;
+      }
+      setMessage('Recuperadas '+restored+' fichas ausentes; '+skipped+
+        ' existentes conservadas. No se han borrado ni sobrescrito datos.');
+      setRestorePreview(null);
+    }catch(error){
+      setMessage('Restauración parcial ('+restored+' fichas). Puedes repetir sin sobrescribir: '+
+        (error instanceof Error?error.message:String(error)));
+    }finally{setIsApproving(false);}
+  };
   const handleApproveAndSave = async () => {
     if (!parsedData || isApproving) return;
     if (!backupReady) {setMessage('Descarga primero el backup de los datos revisados.');return;}
@@ -2811,6 +2866,21 @@ function ImportWordPage() {
             </ol>
           </div>
 
+          <details className="rounded-2xl border border-ink/10 p-4 space-y-3">
+            <summary className="text-sm font-semibold cursor-pointer">Restaurar fichas ausentes desde backup JSON</summary>
+            <p className="text-xs text-ink/55 my-3">Recuperación no destructiva: sólo recrea fichas eliminadas. No deshace las altas de importaciones ni sobrescribe cambios posteriores.</p>
+            <input aria-label="Archivo backup JSON" type="file" accept=".json,application/json"
+              onChange={readRestoreBackup} className="block w-full text-xs"/>
+            {restorePreview && (
+              <div className="space-y-2">
+                <p className="text-xs">{restorePreview.artist?'1 artista':'0 artistas'} · {restorePreview.albums.length} álbum(es) en el backup</p>
+                <button type="button" disabled={isApproving} onClick={restoreMissingFromBackup}
+                  className="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold disabled:opacity-40">
+                  Restaurar sólo fichas ausentes
+                </button>
+              </div>
+            )}
+          </details>
           {batchResults.length>0 && (
             <div className="rounded-2xl border border-ink/10 p-4 space-y-3">
               <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Archivos del lote</h3>
