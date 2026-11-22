@@ -11,7 +11,8 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
-import { wordAlbumCandidates, sameWordEdition, mayReplaceBiography, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
+import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
+import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
@@ -92,6 +93,7 @@ interface ServerRecording {
   editionYear?: string;
   country?: string;
   notes?: string;
+  discNumber?: number;
 }
 
 interface ServerComposer {
@@ -115,6 +117,8 @@ interface ParsedWordImport {
   recordings?: ServerRecording[];
   warnings?: string[];
   sourceFileName?: string;
+  sourceType?: 'structured-word' | 'ai-chunks';
+  chunkCount?: number;
 }
 
 interface ImportJobRecord {
@@ -125,6 +129,10 @@ interface ImportJobRecord {
   extractedData?: ParsedWordImport;
   approvedAt?: string;
   source?: string;
+  reviewedEditions?: ReviewedEdition[];
+  completedAlbumIds?: string[];
+  storagePath?: string;
+  fileUrl?: string;
 }
 
 
