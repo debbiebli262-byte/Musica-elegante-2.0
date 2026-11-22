@@ -2,6 +2,7 @@ import { resolveWordDiscCount } from './wordSourceAccuracy.js';
 export interface WordAlbumCandidate {
   title: string;
   label: string;
+  originalLabel?: string;
   catalogNumber: string;
   barcode: string;
   format: string;
@@ -32,7 +33,7 @@ export function wordAlbumCandidates(albums: Partial<WordAlbumCandidate>[], recor
     const barcode = String(source.barcode || '').trim();
     if (!title && !catalogNumber && !barcode) return;
     const candidate: WordAlbumCandidate = {
-      title, label: String(source.label || ''), catalogNumber, barcode,
+      title, label: String(source.label || ''), originalLabel: String(source.originalLabel || ''), catalogNumber, barcode,
       format: String(source.format || ''), editionYear: String(source.editionYear || ''),
       country: String(source.country || ''), discCount: resolveWordDiscCount(String(source.format || ''), source.discCount),
       notes: String(source.notes || ''),
@@ -58,7 +59,7 @@ export function wordAlbumCandidates(albums: Partial<WordAlbumCandidate>[], recor
     // A composition title alone is not proof that an album/edition exists.
     if (!rec.albumTitle && !rec.catalogNumber && !rec.barcode) return;
     add({title: rec.albumTitle || '', label: rec.label || '', catalogNumber: rec.catalogNumber || '',
-      barcode: rec.barcode || '', format: rec.format || '', editionYear: rec.editionYear || '',
+      barcode: rec.barcode || '', originalLabel: (rec as WordRecordingReference & {originalLabel?:string}).originalLabel || '', format: rec.format || '', editionYear: rec.editionYear || '',
       country: rec.country || '', notes: rec.notes || ''});
   });
   return [...result.values()];
