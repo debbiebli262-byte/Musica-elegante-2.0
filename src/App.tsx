@@ -14,6 +14,7 @@ import { normalizeRecordLabels } from './utils/recordLabels';
 import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
 import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, applyDiscogsReviewField, applyDiscogsReviewExtras, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
+import { buildManualEdition, manualEditionIdentity } from './utils/manualDiscogsEdition';
 import { makeDiscogsEditPreview, pickDiscogsChanges, DISCOGS_EDIT_FIELDS, type DiscogsEditPreview, type DiscogsEditKey } from './utils/discogsEditReview';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
@@ -3660,29 +3661,36 @@ function DiscogsImportPage() {
   const matchingCandidates = matchingDiscogsEditions(editionCandidates, editionLabel, editionFormat);
 
   const confirmManualEdition = () => {
-    if (!manualTitle.trim() || !manualArtist.trim() || !editionLabel.trim() || !editionFormat) {
-      setEditionError('Completa el título, artista, sello de tu ejemplar y formato.');
+    let physicalCopy: ReturnType<typeof buildManualEdition>;
+    try {
+      physicalCopy=buildManualEdition({
+        title:manualTitle,artist:manualArtist,label:editionLabel,format:editionFormat,
+        catalogNumber:manualCatalog,barcode:manualBarcode,year:manualYear,
+        country:manualCountry,originalLabel:manualOriginalLabel,discCount:manualDiscCount
+      });
+    } catch(error) {
+      setEditionError(error instanceof Error?error.message:String(error));
       return;
     }
     // A manually identified copy must not inherit edition-specific metadata from a search result.
-    setTitle(manualTitle.trim());
-    setArtistName(manualArtist.trim());
-    setSelectedArtistNames([manualArtist.trim()]);
-    setLabel(editionLabel.trim());
+    setTitle(physicalCopy.title);
+    setArtistName(physicalCopy.artist);
+    setSelectedArtistNames([physicalCopy.artist]);
+    setLabel(physicalCopy.label);
     setDiscogsLabelOptions([]);
-    setFormats([editionFormat]);
-    setCatalogNumber(manualCatalog.trim());
-    setEditionCatalogNumber(manualCatalog.trim());
-    setReleaseYear(manualYear.trim());
-    setEditionDate(manualYear.trim());
-    setCountry(manualCountry.trim());
-    setDiscCount(manualDiscCount);
+    setFormats(physicalCopy.formats);
+    setCatalogNumber(physicalCopy.catalogNumber);
+    setEditionCatalogNumber(physicalCopy.catalogNumber);
+    setReleaseYear(physicalCopy.releaseYear);
+    setEditionDate(physicalCopy.releaseYear);
+    setCountry(physicalCopy.country);
+    setDiscCount(physicalCopy.discCount);
     setReleaseDate('');
     setRecordingDates('');
     setLocation('');
     setImageUrl('');
     setDiscogsUrl('');
-    setOriginalLabel(manualOriginalLabel.trim());
+    setOriginalLabel(physicalCopy.originalLabel);
     setOriginalCatalogNumber('');
     setOriginalYear('');
     setOrchestra('');
@@ -3876,7 +3884,12 @@ function DiscogsImportPage() {
       }
 
       // Manual editions have no Discogs release ID and use an independent catalog identity.
-      const manualIdentity = [catalogNumber || manualBarcode || 'sin-catalogo', label, formats[0] || '', country].join('-');
+      const manualIdentity = editionMode === 'manual'
+        ? manualEditionIdentity(buildManualEdition({
+            title,artist:mainArtistName,label,format:formats[0] as 'CD' | 'Vinilo' | '',
+            catalogNumber,barcode:manualBarcode,year:releaseYear,country,originalLabel,discCount
+          }))
+        : '';
       const albumId = editionMode === 'manual'
         ? slugifyAlbumId(mainArtistName, title, releaseYear, manualIdentity) + '_manual'
         : slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
@@ -3888,7 +3901,7 @@ function DiscogsImportPage() {
       }
       await setDoc(albumRef, {
         ...(editionMode === 'discogs' ? { discogsReleaseId: Number(editionReleaseId) } : {}),
-        importSource: { method: editionMode === 'manual' ? 'manual-edition' : 'Discogs' },
+        importSource: { fileName: '', method: editionMode === 'manual' ? 'manual-edition' : 'Discogs' },
         ...(editionMode === 'manual' && manualBarcode.trim() ? { barcode: manualBarcode.trim() } : {}),
         artistId: mainArtistId,
         artistName: mainArtistName,
