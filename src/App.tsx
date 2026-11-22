@@ -11,6 +11,7 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
+import { editorSelloOptions } from './utils/editorSelloOptions';
 import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
 import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, applyDiscogsReviewField, applyDiscogsReviewExtras, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
@@ -3453,11 +3454,17 @@ function DiscogsImportPage() {
   const [country, setCountry] = useState('');
   const [label, setLabel] = useState('');
   const [discogsLabelOptions, setDiscogsLabelOptions] = useState<string[]>([]);
+  const [catalogEditorSellos, setCatalogEditorSellos] = useState<string[]>([]);
   const [editionCandidates, setEditionCandidates] = useState<DiscogsEditionCandidate[]>([]);
   const [editionDialogOpen, setEditionDialogOpen] = useState(false);
   const [editionConfirmed, setEditionConfirmed] = useState(false);
   const [editionLabel, setEditionLabel] = useState('');
   const [editionFormat, setEditionFormat] = useState<'CD' | 'Vinilo' | ''>('');
+  const editorSelloChoices = editorSelloOptions(
+    catalogEditorSellos,
+    [...discogsLabelOptions, ...editionCandidates.flatMap(candidate => candidate.labels)],
+    [label, editionLabel]
+  );
   const [editionReleaseId, setEditionReleaseId] = useState('');
   const [editionMode, setEditionMode] = useState<'discogs' | 'manual'>('discogs');
   const [manualTitle, setManualTitle] = useState('');
@@ -3579,6 +3586,17 @@ function DiscogsImportPage() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    // Offer labels already used on physical editions in this catalog, not original labels.
+    getDocs(collection(db, 'albums')).then(snapshot => {
+      if (mounted) setCatalogEditorSellos(snapshot.docs.map(album => String(album.data().label || '')));
+    }).catch(error => {
+      console.warn('No se pudo cargar la lista de sellos existentes', error);
+    });
+    return () => { mounted = false; };
   }, []);
 
   const normalizeArtistName = (value: string) => value.trim().replace(/\s+/g, ' ');
@@ -4056,11 +4074,29 @@ function DiscogsImportPage() {
                   <input value={manualArtist} onChange={e=>setManualArtist(e.target.value)}
                     className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Artista de tu álbum"/>
                 </label>
-                <label className="block space-y-1">
-                  <span className="text-sm font-semibold">Sello Editor de tu ejemplar *</span>
-                  <input value={editionLabel} onChange={e=>setEditionLabel(e.target.value)}
-                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Ej. Acoustic Sounds Series"/>
-                </label>
+                <div className="space-y-2">
+                  <label htmlFor="manual-editor-sello" className="block text-sm font-semibold">Sello Editor de tu ejemplar *</label>
+                  <input id="manual-editor-sello" list="manual-editor-sello-suggestions"
+                    value={editionLabel} onChange={e=>setEditionLabel(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Buscar o escribir un sello"/>
+                  <datalist id="manual-editor-sello-suggestions">
+                    {editorSelloChoices.map(sello=><option key={sello} value={sello}/>)}
+                  </datalist>
+                  <label htmlFor="manual-editor-sello-list" className="block text-xs text-ink/60">
+                    O seleccionar un sello de la lista
+                  </label>
+                  <select id="manual-editor-sello-list"
+                    value={editorSelloChoices.includes(editionLabel) ? editionLabel : ''}
+                    onChange={e=>{setEditionLabel(e.target.value);setEditionError('');}}
+                    className="w-full rounded-xl border border-ink/10 bg-white px-4 py-3 text-sm">
+                    <option value="">Seleccionar sello...</option>
+                    {editorSelloChoices.map(sello=><option key={sello} value={sello}>{sello}</option>)}
+                  </select>
+                  <p className="text-xs text-ink/50">
+                    Lista de sellos usados en el catálogo y encontrados en Discogs.
+                    Si tu sello no aparece, puedes escribir uno nuevo arriba.
+                  </p>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="block space-y-1">
                     <span className="text-sm font-semibold">Número de catálogo</span>
@@ -4233,8 +4269,15 @@ function DiscogsImportPage() {
                     className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3"
                     placeholder="Seleccionar o escribir el sello de tu ejemplar"/>
                   <datalist id="import-sellos-sugeridos">
-                    {discogsLabelOptions.map(item => <option key={item} value={item}/>)}
+                    {editorSelloChoices.map(item => <option key={item} value={item}/>)}
                   </datalist>
+                  <select aria-label="Elegir Sello Editor de la lista"
+                    value={editorSelloChoices.includes(label) ? label : ''}
+                    onChange={e=>setLabel(e.target.value)}
+                    className="w-full min-w-0 bg-white border border-ink/10 rounded-xl px-4 py-3 text-sm">
+                    <option value="">Seleccionar sello de la lista...</option>
+                    {editorSelloChoices.map(item=><option key={item} value={item}>{item}</option>)}
+                  </select>
                   <p className="text-xs text-ink/50">
                     Corresponde a la edición que tienes en casa. Puedes corregirlo manualmente;
                     no altera el Sello Original.
