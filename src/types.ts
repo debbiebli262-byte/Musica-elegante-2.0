@@ -126,6 +126,10 @@ export interface Album {
   engineer?: string;
   producer?: string;
   musicians?: Musician[];
+  unassignedWorks?: Work[]; // Works whose physical disc number is not verified
+  importSource?: { fileName: string; method: string; discogsReleaseId?: number };
+  barcode?: string;
+  discogsReleaseId?: number;
   tracks?: Track[]; // Kept for Jazz
   discs?: Disc[]; // Added for Classical
   anecdotes?: string;
