@@ -4119,11 +4119,29 @@ function DiscogsImportPage() {
                       className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Ej. US"/>
                   </label>
                 </div>
-                <label className="block space-y-1">
-                  <span className="text-sm font-semibold">Sello Original (histórico, si se conoce)</span>
-                  <input value={manualOriginalLabel} onChange={e=>setManualOriginalLabel(e.target.value)}
-                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Dejar en blanco si se desconoce"/>
-                </label>
+                <div className="space-y-2">
+                  <label htmlFor="manual-original-sello" className="block text-sm font-semibold">Sello Original</label>
+                  <input id="manual-original-sello" list="manual-original-sello-suggestions"
+                    value={manualOriginalLabel} onChange={e=>setManualOriginalLabel(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Buscar o escribir un sello"/>
+                  <datalist id="manual-original-sello-suggestions">
+                    {editorSelloChoices.map(sello=><option key={sello} value={sello}/>)}
+                  </datalist>
+                  <label htmlFor="manual-original-sello-list" className="block text-xs text-ink/60">
+                    O seleccionar un sello de la lista
+                  </label>
+                  <select id="manual-original-sello-list"
+                    value={editorSelloChoices.includes(manualOriginalLabel) ? manualOriginalLabel : ''}
+                    onChange={e=>setManualOriginalLabel(e.target.value)}
+                    className="w-full rounded-xl border border-ink/10 bg-white px-4 py-3 text-sm">
+                    <option value="">Seleccionar sello...</option>
+                    {editorSelloChoices.map(sello=><option key={sello} value={sello}>{sello}</option>)}
+                  </select>
+                  <p className="text-xs text-ink/50">
+                    Lista de sellos usados en el catálogo y encontrados en Discogs.
+                    Si tu sello no aparece, puedes escribir uno nuevo arriba.
+                  </p>
+                </div>
                 <label className="block space-y-1">
                   <span className="text-sm font-semibold">Cantidad de discos</span>
                   <input type="number" min="1" max="100" value={manualDiscCount}
