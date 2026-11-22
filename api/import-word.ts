@@ -2,6 +2,7 @@ import { requireLibraryMember } from '../src/server/libraryAuth.js';
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI } from "@google/genai";
 import { extractSourceBiography, normalizeWrittenFullDate } from '../src/utils/wordSourceAccuracy.js';
+import { parseStructuredWord, splitWordForAI } from '../src/utils/structuredWord.js';
 
 // Dynamically import mammoth only when needed (it's a heavy CommonJS module)
 async function extractTextFromDocx(buffer: Buffer): Promise<string> {
@@ -85,6 +86,14 @@ export default async function handler(
       return res.status(400).json({ error: "El archivo está vacío o no contiene texto legible." });
     }
 
+    // Structured Word files are parsed deterministically, including every recording.
+    const structured = parseStructuredWord(rawText);
+    if (structured) return res.status(200).json({...structured,sourceFileName:fileName});
+    if (rawText.length > 250000) {
+      return res.status(413).json({error:'El documento libre supera 250.000 caracteres. Divídelo en archivos menores; no se ha omitido ni guardado ningún contenido.'});
+    }
+
+    // Unstructured Word files are analyzed in bounded chunks. Nothing is silently truncated.
     // Parse with Gemini AI
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -93,107 +102,111 @@ export default async function handler(
 
     const ai = new GoogleGenAI({ apiKey });
 
+    const chunks = splitWordForAI(rawText, 11000);
+    const parseChunk = async (chunk: string) => {
     const prompt = `Analiza el siguiente texto extraído de un archivo Word sobre un artista de música clásica o jazz y su discografía. Extrae todos los datos documentados, sin añadir información inventada.
-
-Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin explicaciones) con esta estructura exacta:
-
-{
-  "composer": {
-    "name": "nombre del artista o compositor",
-    "birthDate": "fecha en formato YYYY-MM-DD o texto libre si no hay formato claro",
-    "birthPlace": "lugar de nacimiento",
-    "deathDate": "fecha en formato YYYY-MM-DD o texto libre",
-    "deathPlace": "lugar de fallecimiento",
-    "nationality": "nacionalidad",
-    "biography": "transcripción fiel y completa de la biografía del documento"
-  },
-  "albums": [
-    {
-      "title": "título exacto del álbum si aparece",
-      "label": "sello de esta edición",
-      "catalogNumber": "número de catálogo de esta edición",
-      "barcode": "código de barras si está presente",
-      "format": "CD, Vinilo, etc., solo si figura",
-      "editionYear": "año de esta edición",
-      "country": "país si figura",
-      "discCount": 1,
-      "notes": ""
-    }
-  ],
-  "recordings": [
-    {
-      "section": "sección o categoría",
-      "workTitle": "título de la obra",
-      "workSubtitle": "subtítulo",
-      "opus": "número de opus",
-      "compositionDate": "fecha de composición",
-      "premiereDate": "fecha de estreno",
-      "soloists": ["nombre solista 1", "nombre solista 2"],
-      "performers": ["intérprete 1", "intérprete 2"],
-      "orchestra": "nombre de la orquesta",
-      "conductor": "nombre del director",
-      "choir": "nombre del coro",
-      "recordingDate": "fecha de grabación",
-      "recordingLocation": "lugar de grabación",
-      "albumTitle": "título del álbum",
-      "albumSubtitle": "subtítulo del álbum",
-      "label": "sello discográfico",
-      "catalogNumber": "número de catálogo",
-      "barcode": "código de barras",
-      "format": "formato (CD, Vinilo, etc.)",
-      "editionYear": "año de edición",
-      "country": "país",
-      "notes": "notas adicionales"
-    }
-  ],
-  "warnings": ["advertencia 1 si hay información ambigua"]
-}
-
-Si algún campo no existe en el texto, déjalo como cadena vacía "" o array vacío [].
-No inventes información que no esté en el texto.
-Identifica TODOS los álbumes y sus catálogos/códigos de barras, incluso si hay más de uno.
-Conserva la biografía íntegra de la persona en composer.biography: no la resumas, reescribas ni sustituyas por una biografía generada.
-Separa los lanzamientos por número de catálogo, código de barras, sello y formato.
-No conviertas obras o pistas en álbumes si el documento no indica una edición discográfica.
-No atribuyas información de un álbum a otro.
-Si hay datos inciertos, añádelos a warnings. Nunca inventes números de catálogo, fechas ni biografías.
-
-TEXTO A ANALIZAR:
-${rawText.slice(0, 80000)}`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: { responseMimeType: 'application/json' },
-    });
-
-    const responseText = response.text || "";
-
-    // Clean up response (remove markdown fences if present)
-    const cleaned = responseText
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      // Try to extract JSON from response
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        return res.status(500).json({
-          error: "La IA no devolvió un JSON válido. Intenta reformatear el documento.",
-          rawText: responseText.slice(0, 500),
-        });
+  
+  Devuelve ÚNICAMENTE un objeto JSON válido (sin markdown, sin backticks, sin explicaciones) con esta estructura exacta:
+  
+  {
+    "composer": {
+      "name": "nombre del artista o compositor",
+      "birthDate": "fecha en formato YYYY-MM-DD o texto libre si no hay formato claro",
+      "birthPlace": "lugar de nacimiento",
+      "deathDate": "fecha en formato YYYY-MM-DD o texto libre",
+      "deathPlace": "lugar de fallecimiento",
+      "nationality": "nacionalidad",
+      "biography": "transcripción fiel y completa de la biografía del documento"
+    },
+    "albums": [
+      {
+        "title": "título exacto del álbum si aparece",
+        "label": "sello de esta edición",
+        "catalogNumber": "número de catálogo de esta edición",
+        "barcode": "código de barras si está presente",
+        "format": "CD, Vinilo, etc., solo si figura",
+        "editionYear": "año de esta edición",
+        "country": "país si figura",
+        "discCount": 1,
+        "notes": ""
       }
+    ],
+    "recordings": [
+      {
+        "section": "sección o categoría",
+        "workTitle": "título de la obra",
+        "workSubtitle": "subtítulo",
+        "opus": "número de opus",
+        "compositionDate": "fecha de composición",
+        "premiereDate": "fecha de estreno",
+        "soloists": ["nombre solista 1", "nombre solista 2"],
+        "performers": ["intérprete 1", "intérprete 2"],
+        "orchestra": "nombre de la orquesta",
+        "conductor": "nombre del director",
+        "choir": "nombre del coro",
+        "recordingDate": "fecha de grabación",
+        "recordingLocation": "lugar de grabación",
+        "albumTitle": "título del álbum",
+        "albumSubtitle": "subtítulo del álbum",
+        "label": "sello discográfico",
+        "catalogNumber": "número de catálogo",
+        "barcode": "código de barras",
+        "format": "formato (CD, Vinilo, etc.)",
+        "editionYear": "año de edición",
+        "country": "país",
+        "notes": "notas adicionales"
+      }
+    ],
+    "warnings": ["advertencia 1 si hay información ambigua"]
+  }
+  
+  Si algún campo no existe en el texto, déjalo como cadena vacía "" o array vacío [].
+  No inventes información que no esté en el texto.
+  Identifica TODOS los álbumes y sus catálogos/códigos de barras, incluso si hay más de uno.
+  Conserva la biografía íntegra de la persona en composer.biography: no la resumas, reescribas ni sustituyas por una biografía generada.
+  Separa los lanzamientos por número de catálogo, código de barras, sello y formato.
+  No conviertas obras o pistas en álbumes si el documento no indica una edición discográfica.
+  No atribuyas información de un álbum a otro.
+  Si hay datos inciertos, añádelos a warnings. Nunca inventes números de catálogo, fechas ni biografías.
+  
+  TEXTO A ANALIZAR:
+  ${chunk}`;
+  
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: { responseMimeType: 'application/json' },
+      });
+  
+  
+      const responseText = response.text || '';
+      const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (!parsed || typeof parsed !== 'object') throw new Error('Respuesta AI inválida');
+      return parsed as Record<string, any>;
+    };
+    // At most three AI requests run at once to limit provider throttling.
+    const partials: Record<string, any>[] = [];
+    for (let offset=0;offset<chunks.length;offset+=3) {
+      const group = await Promise.all(chunks.slice(offset,offset+3).map(parseChunk));
+      partials.push(...group);
     }
-
-    if (!parsed || typeof parsed !== 'object' || !parsed.composer || !Array.isArray(parsed.recordings)) {
-      return res.status(502).json({ error: 'La IA devolvió una estructura incompleta. No se guardó ningún dato.' });
+    const parsed: any = {
+      composer:{}, albums:[],recordings:[],warnings:[],
+      sourceType:'ai-chunks', chunkCount: chunks.length,
+    };
+    for(const part of partials){
+      if(part.composer) for(const [key,value] of Object.entries(part.composer)) {
+        if(value && !parsed.composer[key]) parsed.composer[key]=value;
+      }
+      if(Array.isArray(part.albums)) parsed.albums.push(...part.albums);
+      if(Array.isArray(part.recordings)) parsed.recordings.push(...part.recordings);
+      if(Array.isArray(part.warnings)) parsed.warnings.push(...part.warnings);
     }
+    if (!parsed.composer?.name && !parsed.recordings.length && !parsed.albums.length) {
+      return res.status(502).json({error:'La IA no logró extraer datos completos. No se guardó ningún cambio.'});
+    }
+    if(chunks.length>1) parsed.warnings.push(`Se analizaron ${chunks.length} bloques del documento; revisa la unión de álbumes y obras.`);
     // For structured Word files, take the biography directly from the source.
     // AI is still used for record/edition extraction, but never paraphrases existing biography text.
     const exactBiography = extractSourceBiography(rawText);
@@ -204,7 +217,7 @@ ${rawText.slice(0, 80000)}`;
     }
     parsed.albums = Array.isArray(parsed.albums) ? parsed.albums : [];
     parsed.warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
-    if (rawText.length > 80000) parsed.warnings.push('El documento excede 80.000 caracteres: revisa que todos los álbumes hayan sido extraídos.');
+
     parsed.sourceFileName = fileName;
     return res.status(200).json(parsed);
   } catch (error: any) {
