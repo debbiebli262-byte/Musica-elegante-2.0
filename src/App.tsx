@@ -2888,48 +2888,111 @@ function ImportWordPage() {
                   </div>
                   {enrichMessage && <p role="status" className="text-xs rounded-lg bg-ink/5 p-3 text-ink/70">{enrichMessage}</p>}
                   {albumsForImport.map((candidate, index) => {
-                    const source = extractedCandidates[index];
-                    const key = normalizedEditionKey(source);
-                    const matches = discogsMatches[key] || [];
-                    const enriched = enrichedWordAlbums[key];
-                    return (
-                      <div key={key + '-' + index} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-3">
-                        <div className="flex gap-3 items-start">
-                          {enriched?.imageUrl ? <img src={enriched.imageUrl} alt={candidate.title} className="w-20 h-20 rounded-xl object-cover shrink-0" /> : <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center"><DiscIcon size={28} className="text-ink/20" /></div>}
-                          <div className="min-w-0 space-y-1 flex-1">
-                            <h4 className="font-serif text-xl break-words">{candidate.title || 'Título no identificado'}</h4>
-                            <p className="text-xs text-ink/60 break-words">{[candidate.label, candidate.catalogNumber, candidate.barcode && `EAN: ${candidate.barcode}`, candidate.format, candidate.editionYear].filter(Boolean).join(' · ') || 'Edición sin identificadores'}</p>
-                            {enriched?.discogsReleaseId && <p className="text-xs text-gold font-semibold">Discogs #{enriched.discogsReleaseId} · Verificado</p>}
-                          </div>
+                    const key=candidate.sourceKey;
+                    const matches=discogsMatches[key]||[];
+                    const fields: Array<[ReviewField,string]> = [
+                      ['title','Título del álbum'], ['label','Sello de tu ejemplar'],
+                      ['catalogNumber','Nº de catálogo'],['barcode','Barcode'],
+                      ['format','Formato (CD/Vinilo)'],['editionYear','Año de edición'],
+                      ['country','País']
+                    ];
+                    return <div key={key} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-4">
+                      <div className="flex items-start gap-3">
+                        {candidate.imageUrl?
+                          <img src={candidate.imageUrl} alt="" className="w-20 h-20 rounded-xl object-cover shrink-0"/>:
+                          <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center">
+                            <DiscIcon size={26} className="text-ink/20"/>
+                          </div>}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-serif text-xl break-words">{candidate.title||'Sin título'}</p>
+                          <p className="text-xs text-ink/55">{candidate.label||'Sin sello'} · {candidate.catalogNumber||'Sin catálogo'}</p>
+                          <p className="text-xs text-ink/50 mt-1">
+                            {candidate.discogsReleaseId?'Discogs release #'+candidate.discogsReleaseId:'Datos extraídos del Word; falta verificar la edición'}
+                          </p>
                         </div>
-                        {(candidate.barcode || candidate.catalogNumber) && (
-                          <div className="space-y-2">
-                            <button type="button" disabled={Boolean(enrichingAlbum)} onClick={() => lookupWordAlbum(source)}
-                              className="rounded-full border border-ink/20 px-4 py-2 text-xs font-bold hover:bg-ink/5 disabled:opacity-40">
-                              {enrichingAlbum === key ? 'Buscando...' : 'Buscar edición en Discogs'}
-                            </button>
-                            {matches.length > 0 && (
-                              <div className="flex flex-col sm:flex-row gap-2">
-                                <select aria-label={`Seleccionar edición de ${candidate.title}`}
-                                  value={discogsSelection[key] || ''}
-                                  onChange={event => setDiscogsSelection(current => ({...current, [key]: event.target.value}))}
-                                  className="min-w-0 flex-1 rounded-xl bg-ink/5 px-3 py-3 text-sm">
-                                  <option value="">Elegir edición exacta...</option>
-                                  {matches.map(match => (
-                                    <option value={match.id} key={match.id}>
-                                      {match.title} · {match.year || 's/f'} · {match.catno} · {match.formats.join('/')} · #{match.id}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button type="button" disabled={Boolean(enrichingAlbum) || !discogsSelection[key]}
-                                  onClick={() => confirmWordDiscogsRelease(source)}
-                                  className="rounded-xl bg-ink text-paper px-4 py-3 text-xs font-semibold disabled:opacity-40">Aplicar edición</button>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                          <input type="checkbox" checked={candidate.include} onChange={event=>
+                            updateReviewedEdition(key,item=>({...item,include:event.target.checked}))}/>
+                          Importar
+                        </label>
                       </div>
-                    );
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {fields.map(([field,label])=>(
+                          <label key={field} className="space-y-1 min-w-0">
+                            <span className="text-xs font-medium text-ink/60">{label}</span>
+                            <input value={String(candidate[field]||'')}
+                              onChange={event=>updateReviewedEdition(key,item=>
+                                editReviewField(item,field,event.target.value))}
+                              className="w-full min-w-0 rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
+                            <span className="block text-[10px] text-ink/40">Fuente: {candidate.origin[field]||'Sin identificar'}</span>
+                          </label>
+                        ))}
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-ink/60">Sello original (histórico)</span>
+                          <input value={candidate.originalLabel||''} onChange={event=>
+                            updateReviewedEdition(key,item=>({...item,originalLabel:event.target.value}))}
+                            className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"
+                            placeholder="Dejar en blanco si se desconoce"/>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-ink/60">Discos físicos en el paquete</span>
+                          <input type="number" min="1" max="100" value={candidate.discCount}
+                            onChange={event=>updateReviewedEdition(key,item=>({...item,
+                              discCount:Math.min(100,Math.max(1,Number(event.target.value)||1))}))}
+                            className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
+                        </label>
+                      </div>
+                      {(candidate.barcode||candidate.catalogNumber)&&(
+                        <div className="space-y-2 border-t border-ink/10 pt-3">
+                          <button type="button" disabled={Boolean(enrichingAlbum)} onClick={()=>lookupWordAlbum(candidate)}
+                            className="rounded-full border border-ink/15 px-4 py-2 text-xs font-semibold disabled:opacity-40">
+                            {enrichingAlbum===key?'Buscando...':'Contrastar con Discogs'}
+                          </button>
+                          {!!matches.length&&(
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <select aria-label={'Edición de '+candidate.title} value={discogsSelection[key]||''}
+                                onChange={event=>setDiscogsSelection(current=>({...current,[key]:event.target.value}))}
+                                className="flex-1 min-w-0 bg-ink/5 rounded-xl px-3 py-2 text-sm">
+                                <option value="">Elige una edición comprobable...</option>
+                                {matches.map(match=><option value={match.id} key={match.id}>
+                                  {match.title} · {match.year} · {match.catno} · {match.labels.join('/')} · {match.formats.join('/')}
+                                </option>)}
+                              </select>
+                              <button type="button" disabled={!discogsSelection[key]||Boolean(enrichingAlbum)}
+                                onClick={()=>confirmWordDiscogsRelease(candidate)}
+                                className="rounded-xl bg-ink text-paper px-4 py-2 text-xs disabled:opacity-40">Aplicar edición</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {candidate.conflicts.length>0&&(
+                        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
+                          <h5 className="text-xs font-semibold text-amber-900">Diferencias detectadas · Revisión obligatoria</h5>
+                          {candidate.conflicts.map(conflict=>(
+                            <div key={conflict.field} className="rounded-lg bg-white p-3 space-y-2">
+                              <p className="text-xs font-semibold">{conflict.field} {conflict.resolved?'✓':'· pendiente'}</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                    resolveReviewConflict(item,conflict.field,'Word'))}
+                                  className="text-left rounded-lg border border-ink/10 px-3 py-2 text-xs">
+                                  <b>Word:</b> {conflict.word}
+                                </button>
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                    resolveReviewConflict(item,conflict.field,'Discogs'))}
+                                  className="text-left rounded-lg border border-ink/10 px-3 py-2 text-xs">
+                                  <b>Discogs:</b> {conflict.discogs}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-xs text-ink/50">
+                        Fuentes: Word ({parsedData?.sourceFileName||selectedFile?.name||'documento'})
+                        {candidate.discogsReleaseId?' · Discogs release '+candidate.discogsReleaseId:''}.
+                        La portada y la lista de pistas se incorporan sólo al confirmar una edición exacta.
+                      </p>
+                    </div>;
                   })}
                   {!albumsForImport.length && <p className="text-sm text-ink/50 rounded-xl border border-dashed border-ink/20 p-4">No se detectaron ediciones discográficas. Puedes guardar la biografía; no se inventarán álbumes a partir de obras aisladas.</p>}
                 </section>
