@@ -12,7 +12,7 @@ import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
 import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
-import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
+import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, applyDiscogsReviewField, applyDiscogsReviewExtras, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { makeDiscogsEditPreview, pickDiscogsChanges, DISCOGS_EDIT_FIELDS, type DiscogsEditPreview, type DiscogsEditKey } from './utils/discogsEditReview';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
@@ -3042,10 +3042,22 @@ function ImportWordPage() {
                                 editReviewField(item,field,event.target.value))}
                               className="w-full min-w-0 rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
                             <span className="block text-[10px] text-ink/40">Fuente: {candidate.origin[field]||'Sin identificar'}</span>
+                            {candidate.discogsSuggestions?.[field] && (
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-gold/[0.08] p-2">
+                                <span className="text-[11px] text-ink/70 break-all">
+                                  Discogs: {candidate.discogsSuggestions[field]}
+                                </span>
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                  applyDiscogsReviewField(item,field))}
+                                  className="rounded-full border border-gold/30 px-3 py-1.5 text-[11px] font-bold hover:bg-white">
+                                  Usar este dato
+                                </button>
+                              </div>
+                            )}
                           </label>
                         ))}
                         <label className="space-y-1">
-                          <span className="text-xs font-medium text-ink/60">Sello original (histórico)</span>
+                          <span className="text-xs font-medium text-ink/60">Sello Original · primera edición histórica (no el sello de tu copia)</span>
                           <input value={candidate.originalLabel||''} onChange={event=>
                             updateReviewedEdition(key,item=>({...item,originalLabel:event.target.value}))}
                             className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"
@@ -3081,6 +3093,37 @@ function ImportWordPage() {
                             </div>
                           )}
                         </div>
+                      )}
+                      {candidate.discogsReleaseId && (
+                        <section className="rounded-xl border border-gold/20 bg-gold/[0.05] p-3 space-y-3">
+                          <h5 className="text-xs font-semibold uppercase tracking-widest text-gold">
+                            Otros datos disponibles en Discogs
+                          </h5>
+                          <p className="text-xs text-ink/60">
+                            Ninguno se aplica sin tu elección. El sello original nunca se completa por suposición.
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {candidate.discogsSuggestedImageUrl && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'image'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">Usar portada de Discogs</button>
+                            )}
+                            {Boolean(candidate.discogsSuggestedDiscCount) && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'discCount'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">
+                                Usar cantidad de discos ({candidate.discogsSuggestedDiscCount})
+                              </button>
+                            )}
+                            {Boolean(candidate.discogsSuggestedDiscs?.length) && (
+                              <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                applyDiscogsReviewExtras(item,'discs'))}
+                                className="rounded-full border border-ink/15 px-4 py-2 text-xs">
+                                Usar lista de obras ({candidate.discogsSuggestedDiscs?.length} discos)
+                              </button>
+                            )}
+                          </div>
+                        </section>
                       )}
                       {existingEdition && (
                         <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
