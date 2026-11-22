@@ -2578,6 +2578,8 @@ function ImportWordPage() {
       if(selectedBiography && (!existing?.biography?.trim()||biographyChoice!=='keep')){
         artistPatch.biography=selectedBiography;
       }
+      if(!existing?.nationality && parsedData.composer?.nationality)
+        artistPatch.nationality=parsedData.composer.nationality;
       for(const field of ['birthDate','birthPlace','deathDate','deathPlace'] as const){
         if(!existing?.[field] && parsedData.composer?.[field]) artistPatch[field]=parsedData.composer[field];
       }
@@ -2607,6 +2609,7 @@ function ImportWordPage() {
           Boolean(normalize(edition.catalogNumber||edition.barcode) &&
             [item.data.catalogNumber,item.data.barcode].some(v=>normalize(v)===normalize(edition.catalogNumber||edition.barcode)) &&
             normalize(item.data.label)===normalize(edition.label) &&
+            (!edition.editionYear || !item.data.releaseYear || edition.editionYear===item.data.releaseYear) &&
             physicalFormat && item.data.formats?.some(f=>normalizePhysicalFormat(f)===physicalFormat))
         );
         const albumId=duplicate?.id||slugifyAlbumId(name,edition.title,edition.editionYear,
@@ -2636,7 +2639,7 @@ function ImportWordPage() {
             anecdotes:[edition.notes,...related.map(r=>r.notes)].filter(Boolean).join('\n'),
             imageUrl:edition.imageUrl||'',
             importSource:{fileName:selectedFile?.name||parsedData.sourceFileName||'Word',
-              method:'Word + verificación',...(edition.discogsReleaseId?{discogsReleaseId:edition.discogsReleaseId}:{})},
+              method:'Word + verificación',fieldOrigins:edition.origin,...(edition.discogsReleaseId?{discogsReleaseId:edition.discogsReleaseId}:{})},
             ...(edition.discogsReleaseId?{discogsReleaseId:edition.discogsReleaseId}:{}),
           });
           return true;
@@ -3014,6 +3017,9 @@ function ImportWordPage() {
                       <p className="text-xs text-ink/50">
                         Fuentes: Word ({parsedData?.sourceFileName||selectedFile?.name||'documento'})
                         {candidate.discogsReleaseId?' · Discogs release '+candidate.discogsReleaseId:''}.
+                        {candidate.discogsReleaseId && <a className="ml-1 underline text-gold"
+                          target="_blank" rel="noopener noreferrer"
+                          href={'https://www.discogs.com/release/'+candidate.discogsReleaseId}>Ver fuente</a>}
                         La portada y la lista de pistas se incorporan sólo al confirmar una edición exacta.
                       </p>
                     </div>;
