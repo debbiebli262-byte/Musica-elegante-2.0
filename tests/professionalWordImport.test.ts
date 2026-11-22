@@ -75,4 +75,5 @@ test('recordings are not merged into an album from another label or CD/Vinyl for
     format:'CD',editionYear:'1980',country:'',discCount:1,notes:''},0);
   assert.equal(sameWordEdition(album,{albumTitle:'Sample',catalogNumber:'123',label:'Other',format:'CD'}),false);
   assert.equal(sameWordEdition(album,{albumTitle:'Sample',catalogNumber:'123',label:'Decca',format:'Vinilo'}),false);
+  assert.equal(sameWordEdition(album,{albumTitle:'Sample',catalogNumber:'123',label:'Decca',format:'4 CD (ADD)'}),true);
 });
