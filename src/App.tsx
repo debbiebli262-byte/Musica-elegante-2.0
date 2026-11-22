@@ -14,6 +14,7 @@ import { normalizeRecordLabels } from './utils/recordLabels';
 import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
 import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
+import { makeDiscogsEditPreview, pickDiscogsChanges, DISCOGS_EDIT_FIELDS, type DiscogsEditPreview, type DiscogsEditKey } from './utils/discogsEditReview';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
 import { inspectCatalog, serializeCatalogBackup } from './utils/catalogMaintenance';
@@ -5492,6 +5493,11 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
   const [uploadProgress, setUploadProgress] = useState(0);
   const [sidemenIds, setSidemenIds] = useState<string[]>(album?.sidemenIds || []);
   const [isFetchingDiscogs, setIsFetchingDiscogs] = useState(false);
+  const [discogsPreview, setDiscogsPreview] = useState<DiscogsEditPreview | null>(null);
+  const [discogsChoices, setDiscogsChoices] = useState<Record<string,boolean>>({});
+  const [discogsReviewError, setDiscogsReviewError] = useState('');
+  const [discogsReleaseLoading, setDiscogsReleaseLoading] = useState(false);
+
   const [discogsSearchMode, setDiscogsSearchMode] = useState<'catno' | 'barcode'>('catno');
   const [barcodeNumber, setBarcodeNumber] = useState('');
   const [discogsUrl, setDiscogsUrl] = useState('');
