@@ -4804,9 +4804,10 @@ try {
 function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album: Album, onClose: () => void, onEdit: () => void, highlightArtistId?: string }) {
   const isWork = getCatalogRecordType(album) === 'work';
   const [artistName, setArtistName] = useState<string>(album.artistName || '');
-  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0);
+  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0) + (album.unassignedWorks?.length || 0);
   const classicalMovementCount = (album.discs || []).reduce((total, disc) =>
-    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0);
+    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0) +
+    (album.unassignedWorks || []).reduce((sum, work) => sum + work.movements.length, 0);
 
   useEffect(() => {
     if (!artistName) {
@@ -5082,6 +5083,23 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                   )))}
               </div>
             </div>
+          )}
+
+          {album.genre === 'classical' && Boolean(album.unassignedWorks?.length) && (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3">
+              <h3 className="font-serif text-xl">Obras sin disco identificado</h3>
+              <p className="text-xs text-ink/60">Estas obras aparecen en el Word, pero no se conoce su ubicación física en el set. No se han asignado al primer disco por suposición.</p>
+              {(album.unassignedWorks || []).map((work,index) => (
+                <div key={index} className="rounded-xl bg-white p-3 space-y-2">
+                  <p className="text-sm font-semibold">{work.title}</p>
+                  {work.compositionDate && <p className="text-xs text-ink/50">Composición: {work.compositionDate}</p>}
+                  {(work.movements||[]).map((movement,i)=>(
+                    <p key={i} className="text-xs text-ink/70">{movement.title}
+                      {movement.notes ? ' · '+movement.notes : ''}</p>
+                  ))}
+                </div>
+              ))}
+            </section>
           )}
 
           {/* Tracks / Works Hierarchy */}
