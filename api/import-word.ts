@@ -122,6 +122,7 @@ export default async function handler(
       {
         "title": "título exacto del álbum si aparece",
         "label": "sello de esta edición",
+      "originalLabel": "sello histórico original, solo si figura explícitamente",
         "catalogNumber": "número de catálogo de esta edición",
         "barcode": "código de barras si está presente",
         "format": "CD, Vinilo, etc., solo si figura",
@@ -149,6 +150,7 @@ export default async function handler(
         "albumTitle": "título del álbum",
         "albumSubtitle": "subtítulo del álbum",
         "label": "sello discográfico",
+      "originalLabel": "sello original si está documentado",
         "catalogNumber": "número de catálogo",
         "barcode": "código de barras",
         "format": "formato (CD, Vinilo, etc.)",
