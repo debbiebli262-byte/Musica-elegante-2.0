@@ -3462,6 +3462,8 @@ function DiscogsImportPage() {
   const [manualTitle, setManualTitle] = useState('');
   const [manualArtist, setManualArtist] = useState('');
   const [manualCatalog, setManualCatalog] = useState('');
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [manualOriginalLabel, setManualOriginalLabel] = useState('');
   const [manualYear, setManualYear] = useState('');
   const [manualCountry, setManualCountry] = useState('');
   const [manualDiscCount, setManualDiscCount] = useState(1);
@@ -3534,6 +3536,8 @@ function DiscogsImportPage() {
     setManualTitle('');
     setManualArtist('');
     setManualCatalog('');
+    setManualBarcode('');
+    setManualOriginalLabel('');
     setManualYear('');
     setManualCountry('');
     setManualDiscCount(1);
@@ -3678,7 +3682,7 @@ function DiscogsImportPage() {
     setLocation('');
     setImageUrl('');
     setDiscogsUrl('');
-    setOriginalLabel('');
+    setOriginalLabel(manualOriginalLabel.trim());
     setOriginalCatalogNumber('');
     setOriginalYear('');
     setOrchestra('');
@@ -3753,6 +3757,8 @@ function DiscogsImportPage() {
       setManualTitle(String(data.title || ''));
       setManualArtist(String(data.primaryArtist || data.artist || ''));
       setManualCatalog('');
+      setManualBarcode('');
+      setManualOriginalLabel('');
       setManualYear('');
       setManualCountry('');
       setManualDiscCount(1);
@@ -3773,6 +3779,8 @@ function DiscogsImportPage() {
         setManualTitle('');
         setManualArtist('');
         setManualCatalog(searchMode === 'catno' ? value : '');
+        setManualBarcode(searchMode === 'barcode' ? value : '');
+        setManualOriginalLabel('');
         setManualYear('');
         setManualCountry('');
         setManualDiscCount(1);
@@ -3798,7 +3806,10 @@ function DiscogsImportPage() {
       if (editionMode === 'discogs' && editionReleaseId &&
           existing.discogsReleaseId === Number(editionReleaseId)) return albumDoc.id;
       const sameEdition = normalized(existing.title) === normalized(title) &&
+        normalized(existing.artistName || existing.artistId) === normalized(artistName) &&
         normalized(existing.catalogNumber) === candidateCat &&
+        (editionMode !== 'manual' || !manualBarcode.trim() ||
+          normalized(existing.barcode) === normalized(manualBarcode)) &&
         normalized(existing.label) === normalized(label) &&
         normalized(existing.releaseYear) === normalized(releaseYear) &&
         existing.formats?.includes(formats[0]);
@@ -3865,7 +3876,7 @@ function DiscogsImportPage() {
       }
 
       // Manual editions have no Discogs release ID and use an independent catalog identity.
-      const manualIdentity = [catalogNumber || 'sin-catalogo', label, formats[0] || '', country].join('-');
+      const manualIdentity = [catalogNumber || manualBarcode || 'sin-catalogo', label, formats[0] || '', country].join('-');
       const albumId = editionMode === 'manual'
         ? slugifyAlbumId(mainArtistName, title, releaseYear, manualIdentity) + '_manual'
         : slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
@@ -3878,6 +3889,7 @@ function DiscogsImportPage() {
       await setDoc(albumRef, {
         ...(editionMode === 'discogs' ? { discogsReleaseId: Number(editionReleaseId) } : {}),
         importSource: { method: editionMode === 'manual' ? 'manual-edition' : 'Discogs' },
+        ...(editionMode === 'manual' && manualBarcode.trim() ? { barcode: manualBarcode.trim() } : {}),
         artistId: mainArtistId,
         artistName: mainArtistName,
         allArtistIds: Array.from(new Set(resolvedArtistIds)),
@@ -3954,6 +3966,26 @@ function DiscogsImportPage() {
         </div>
         {message && <p role="status" className="text-sm text-gold font-medium">{message}</p>}
         {importError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{importError}</p>}
+        <button type="button" onClick={()=>{
+          setEditionMode('manual');
+          setManualTitle(title||'');
+          setManualArtist(artistName||'');
+          setManualCatalog(searchMode==='catno'?searchValue.trim():'');
+          setManualBarcode(searchMode==='barcode'?searchValue.trim():'');
+          setManualOriginalLabel('');
+          setManualYear('');
+          setManualCountry('');
+          setManualDiscCount(1);
+          setEditionLabel('');
+          setEditionFormat('');
+          setEditionReleaseId('');
+          setEditionCandidates([]);
+          setEditionConfirmed(false);
+          setEditionError('');
+          setEditionDialogOpen(true);
+        }} className="text-sm underline text-ink/60 hover:text-gold">
+          ¿No encuentras tu edición? Añadir otra edición manualmente
+        </button>
         {discogsUrl && <a href={discogsUrl} target="_blank" rel="noopener noreferrer" className="inline-block text-sm underline text-ink/60 hover:text-gold">Ver release en Discogs</a>}
       </div>
 
@@ -3965,66 +3997,140 @@ function DiscogsImportPage() {
               <span className="text-xs uppercase tracking-widest font-bold text-gold">Confirmar tu ejemplar</span>
               <h2 id="edition-dialog-heading" className="font-serif text-3xl">¿Qué edición tienes en casa?</h2>
               <p className="text-sm text-ink/60">
-                Elige el sello discográfico y si tu copia es CD o vinilo. Se cargarán los datos de esa edición exacta de Discogs.
+                Puedes elegir una edición de Discogs o introducir los datos de tu ejemplar si no aparece.
+                Nadie está obligado a usar una edición que no coincide.
               </p>
             </div>
-            <div className="space-y-2">
-              <label htmlFor="edition-label" className="text-sm font-semibold">Sello discográfico de tu ejemplar</label>
-              <select id="edition-label" autoFocus value={editionLabel}
-                onChange={e => { setEditionLabel(e.target.value); setEditionReleaseId(''); setEditionError(''); }}
-                className="w-full rounded-xl bg-ink/5 px-4 py-3">
-                <option value="">Selecciona un sello...</option>
-                {Array.from(new Set(editionCandidates.flatMap(candidate => candidate.labels))).sort().map(item =>
-                  <option key={item} value={item}>{item}</option>)}
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" aria-pressed={editionMode==='discogs'} disabled={!editionCandidates.length}
+                onClick={() => { setEditionMode('discogs'); setEditionLabel(''); setEditionReleaseId(''); setEditionError(''); }}
+                className={cn('rounded-xl border px-3 py-3 text-sm font-medium disabled:opacity-40',
+                  editionMode==='discogs'?'border-gold bg-gold/10':'border-ink/15')}>
+                Edición de Discogs
+              </button>
+              <button type="button" aria-pressed={editionMode==='manual'}
+                onClick={() => { setEditionMode('manual'); setEditionLabel(''); setEditionReleaseId(''); setEditionError(''); }}
+                className={cn('rounded-xl border px-3 py-3 text-sm font-medium',
+                  editionMode==='manual'?'border-gold bg-gold/10':'border-ink/15')}>
+                Otra edición / No aparece
+              </button>
             </div>
+            {editionMode==='discogs' ? (
+              <div className="space-y-2">
+                <label htmlFor="edition-label" className="text-sm font-semibold">Sello de la edición en Discogs</label>
+                <select id="edition-label" value={editionLabel}
+                  onChange={e => { setEditionLabel(e.target.value); setEditionReleaseId(''); setEditionError(''); }}
+                  className="w-full rounded-xl bg-ink/5 px-4 py-3">
+                  <option value="">Selecciona un sello...</option>
+                  {Array.from(new Set(editionCandidates.flatMap(candidate => candidate.labels))).sort().map(item =>
+                    <option key={item} value={item}>{item}</option>)}
+                </select>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-sm text-ink/60">
+                  Introduce los datos tal como figuran en el disco o su funda. Son independientes de Discogs.
+                  Podrás editar más detalles después de confirmar.
+                </p>
+                <label className="block space-y-1">
+                  <span className="text-sm font-semibold">Título del álbum *</span>
+                  <input value={manualTitle} onChange={e=>setManualTitle(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Título de tu álbum"/>
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-sm font-semibold">Artista principal *</span>
+                  <input value={manualArtist} onChange={e=>setManualArtist(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Artista de tu álbum"/>
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-sm font-semibold">Sello Editor de tu ejemplar *</span>
+                  <input value={editionLabel} onChange={e=>setEditionLabel(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Ej. Acoustic Sounds Series"/>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block space-y-1">
+                    <span className="text-sm font-semibold">Número de catálogo</span>
+                    <input value={manualCatalog} onChange={e=>setManualCatalog(e.target.value)}
+                      className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Nº de tu copia"/>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-sm font-semibold">Código de barras</span>
+                    <input value={manualBarcode} onChange={e=>setManualBarcode(e.target.value)}
+                      className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Opcional"/>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-sm font-semibold">Año de edición</span>
+                    <input value={manualYear} onChange={e=>setManualYear(e.target.value)}
+                      className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Ej. 2021"/>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-sm font-semibold">País de edición</span>
+                    <input value={manualCountry} onChange={e=>setManualCountry(e.target.value)}
+                      className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Ej. US"/>
+                  </label>
+                </div>
+                <label className="block space-y-1">
+                  <span className="text-sm font-semibold">Sello Original (histórico, si se conoce)</span>
+                  <input value={manualOriginalLabel} onChange={e=>setManualOriginalLabel(e.target.value)}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3" placeholder="Dejar en blanco si se desconoce"/>
+                </label>
+                <label className="block space-y-1">
+                  <span className="text-sm font-semibold">Cantidad de discos</span>
+                  <input type="number" min="1" max="100" value={manualDiscCount}
+                    onChange={e=>setManualDiscCount(Math.max(1,Math.min(100,Number(e.target.value)||1)))}
+                    className="w-full rounded-xl bg-ink/5 px-4 py-3"/>
+                </label>
+              </div>
+            )}
             <fieldset className="space-y-2">
-              <legend className="text-sm font-semibold">Formato de tu ejemplar</legend>
+              <legend className="text-sm font-semibold">Formato de tu ejemplar *</legend>
               <div className="grid grid-cols-2 gap-3">
-                {(['CD', 'Vinilo'] as const).map(value => (
-                  <button key={value} type="button" aria-pressed={editionFormat === value}
-                    onClick={() => { setEditionFormat(value); setEditionReleaseId(''); setEditionError(''); }}
+                {(['CD','Vinilo'] as const).map(value=>(
+                  <button key={value} type="button" aria-pressed={editionFormat===value}
+                    onClick={()=>{setEditionFormat(value);setEditionReleaseId('');setEditionError('');}}
                     className={cn('rounded-xl border px-4 py-4 font-medium',
-                      editionFormat === value ? 'border-gold bg-gold/10' : 'border-ink/15')}>
+                      editionFormat===value?'border-gold bg-gold/10':'border-ink/15')}>
                     {value}
                   </button>
                 ))}
               </div>
             </fieldset>
-            {editionLabel && editionFormat && (
+            {editionMode==='discogs' && editionLabel && editionFormat && (
               <div className="space-y-2">
                 <label htmlFor="edition-release" className="text-sm font-semibold">Edición que corresponde a tu copia</label>
                 {matchingCandidates.length ? (
                   <select id="edition-release"
-                    value={editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '')}
-                    onChange={e => { setEditionReleaseId(e.target.value); setEditionError(''); }}
+                    value={editionReleaseId || (matchingCandidates.length===1?String(matchingCandidates[0].id):'')}
+                    onChange={e=>{setEditionReleaseId(e.target.value);setEditionError('');}}
                     className="w-full rounded-xl bg-ink/5 px-4 py-3 text-sm">
                     <option value="">Seleccionar edición...</option>
-                    {matchingCandidates.map(candidate => (
+                    {matchingCandidates.map(candidate=>(
                       <option key={candidate.id} value={candidate.id}>
-                        {candidate.title} · {candidate.year || 's/f'} · {candidate.catno || 's/n'} · Discogs #{candidate.id}
+                        {candidate.title} · {candidate.year||'s/f'} · {candidate.catno||'s/n'} · Discogs #{candidate.id}
                       </option>
                     ))}
                   </select>
                 ) : (
-                  <p role="alert" className="text-sm text-amber-700">
-                    No aparece una edición que coincida. Busca por el código de barras o un número de catálogo más específico. No se copiarán datos de otra edición.
+                  <p role="status" className="text-sm text-amber-700">
+                    No encontramos una edición que coincida con ese sello y formato. Puedes elegir «Otra edición» e introducir tu copia manualmente.
                   </p>
                 )}
               </div>
             )}
             <p className="text-xs text-ink/50">
-              El sello original es un dato distinto. Sólo se completará si hay una fuente fiable; también puedes ingresarlo manualmente.
+              Sello Editor y Sello Original son datos independientes. Una edición manual no recibirá un identificador falso de Discogs.
             </p>
             {editionError && <p role="alert" className="text-sm text-red-700">{editionError}</p>}
             <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
-              <button type="button" disabled={editionLoading} onClick={() => setEditionDialogOpen(false)}
+              <button type="button" disabled={editionLoading} onClick={()=>setEditionDialogOpen(false)}
                 className="rounded-full border border-ink/15 px-5 py-3 text-sm">Volver sin confirmar</button>
-              <button type="button" disabled={editionLoading || !editionLabel || !editionFormat || !matchingCandidates.length ||
-                (matchingCandidates.length > 1 && !editionReleaseId)}
-                onClick={confirmEdition}
+              <button type="button" disabled={editionLoading || (editionMode==='manual'
+                ? (!manualTitle.trim() || !manualArtist.trim() || !editionLabel.trim() || !editionFormat)
+                : (!editionLabel || !editionFormat || !matchingCandidates.length ||
+                  (matchingCandidates.length>1 && !editionReleaseId)))}
+                onClick={editionMode==='manual'?confirmManualEdition:confirmEdition}
                 className="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white disabled:opacity-40">
-                {editionLoading ? 'Cargando edición...' : 'Confirmar y completar datos'}
+                {editionLoading?'Cargando edición...':editionMode==='manual'?'Continuar con mi edición':'Confirmar y completar datos'}
               </button>
             </div>
           </div>
