@@ -7004,7 +7004,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                   <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Editor</label>
                   {discogsLabelOptions.length > 1 && (
                     <select aria-label="Selecciona el sello de tu edición" value={discogsLabelOptions.includes(label) ? label : ''}
-                      onChange={event => { setLabel(event.target.value); setOriginalLabel(event.target.value); }}
+                      onChange={event => setLabel(event.target.value)}
                       className="w-full bg-ink/5 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-gold">
                       <option value="">Selecciona el sello correcto...</option>
                       {discogsLabelOptions.map(option => <option key={option} value={option}>{option}</option>)}
@@ -7067,6 +7067,103 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                     </button>
                   </div>
 
+                  {discogsPreview && (
+                    <section className="mt-4 rounded-2xl border border-gold/30 bg-gold/[0.06] p-4 space-y-4">
+                      <div className="flex flex-wrap justify-between items-start gap-3">
+                        <div>
+                          <h4 className="font-serif text-xl">Revisar datos de Discogs</h4>
+                          <p className="text-xs text-ink/60 mt-1">
+                            No se ha cambiado nada en el álbum. Marca solamente los datos que quieras copiar
+                            y edítalos aquí antes de aplicarlos.
+                          </p>
+                        </div>
+                        <button type="button" onClick={()=>{setDiscogsPreview(null);setDiscogsChoices({});}}
+                          className="text-xs underline text-ink/60">Descartar propuesta</button>
+                      </div>
+                      {discogsPreview.candidates.length>0 && (
+                        <label className="block space-y-1">
+                          <span className="text-xs font-semibold text-ink/60">Edición exacta de Discogs</span>
+                          <select value={discogsPreview.releaseId||''} disabled={discogsReleaseLoading}
+                            onChange={event=>selectDiscogsRelease(event.target.value)}
+                            className="w-full min-w-0 rounded-xl border border-ink/10 bg-white px-3 py-3 text-sm">
+                            <option value="">Selecciona la edición...</option>
+                            {discogsPreview.candidates.map(item=>(
+                              <option key={item.id} value={item.id}>
+                                {item.title} · {item.year||'s/f'} · {item.labels.join(', ')} · {item.catno} · {item.formats.join('/')}
+                              </option>
+                            ))}
+                          </select>
+                          {discogsReleaseLoading && <span className="text-xs text-ink/50">Cargando edición...</span>}
+                        </label>
+                      )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {DISCOGS_EDIT_FIELDS.map(field=>(
+                          <div key={field.key} className="rounded-xl border border-ink/10 bg-white p-3 space-y-2 min-w-0">
+                            <label className="flex items-center gap-2 text-xs font-semibold">
+                              <input type="checkbox" checked={Boolean(discogsChoices[field.key])}
+                                onChange={event=>setDiscogsChoices(current=>({...current,[field.key]:event.target.checked}))}/>
+                              {field.label}
+                            </label>
+                            <input value={discogsPreview.fields[field.key]}
+                              aria-label={'Valor de Discogs: '+field.label}
+                              onChange={event=>setDiscogsPreview(current=>current?{
+                                ...current,fields:{...current.fields,[field.key]:event.target.value}}:current)}
+                              className="w-full min-w-0 rounded-lg bg-ink/[0.035] px-3 py-2 text-sm"/>
+                          </div>
+                        ))}
+                        <div className="rounded-xl border border-ink/10 bg-white p-3 space-y-2">
+                          <label className="flex gap-2 items-center text-xs font-semibold">
+                            <input type="checkbox" checked={Boolean(discogsChoices.formats)}
+                              onChange={event=>setDiscogsChoices(current=>({...current,formats:event.target.checked}))}/>
+                            Formato de esta edición
+                          </label>
+                          <select value={discogsPreview.formats[0]||''}
+                            onChange={event=>setDiscogsPreview(current=>current?{
+                              ...current,formats:event.target.value?[event.target.value as 'CD'|'Vinilo'|'DVD'|'Bluray']:[]}:current)}
+                            className="w-full rounded-lg bg-ink/[0.035] p-2 text-sm">
+                            <option value="">Sin identificar</option>
+                            <option value="CD">CD</option>
+                            <option value="Vinilo">Vinilo</option>
+                            <option value="DVD">DVD</option>
+                            <option value="Bluray">Bluray</option>
+                          </select>
+                        </div>
+                        <div className="rounded-xl border border-ink/10 bg-white p-3 space-y-2">
+                          <label className="flex gap-2 items-center text-xs font-semibold">
+                            <input type="checkbox" checked={Boolean(discogsChoices.discCount)}
+                              onChange={event=>setDiscogsChoices(current=>({...current,discCount:event.target.checked}))}/>
+                            Cantidad de discos
+                          </label>
+                          <input type="number" min="1" value={discogsPreview.discCount}
+                            onChange={event=>setDiscogsPreview(current=>current?{
+                              ...current,discCount:Math.max(1,Number(event.target.value)||1)}:current)}
+                            className="w-full rounded-lg bg-ink/[0.035] p-2 text-sm"/>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-3 rounded-xl bg-white p-3">
+                        <label className="flex gap-2 items-center text-sm">
+                          <input type="checkbox" checked={Boolean(discogsChoices.tracklist)}
+                            onChange={event=>setDiscogsChoices(current=>({...current,tracklist:event.target.checked}))}/>
+                          Copiar lista de pistas / obras ({genre==='classical'?discogsPreview.discs.length:discogsPreview.tracks.length})
+                        </label>
+                        <label className="flex gap-2 items-center text-sm">
+                          <input type="checkbox" checked={Boolean(discogsChoices.artists)}
+                            onChange={event=>setDiscogsChoices(current=>({...current,artists:event.target.checked}))}/>
+                          Vincular artistas detectados ({discogsPreview.artistNames.length})
+                        </label>
+                      </div>
+                      <p className="text-xs text-ink/60">
+                        **Sello Editor** = sello de esta copia. **Sello Original** = primera edición histórica:
+                        Discogs no lo cambiará ni lo deducirá automáticamente.
+                      </p>
+                      {discogsReviewError&&<p role="alert" className="text-sm text-red-600">{discogsReviewError}</p>}
+                      <button type="button" onClick={applySelectedDiscogsFields} disabled={discogsReleaseLoading||
+                        !Object.values(discogsChoices).some(Boolean)}
+                        className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white disabled:opacity-40">
+                        Aplicar sólo los campos marcados
+                      </button>
+                    </section>
+                  )}
                   {discogsUrl && (
                     <p className="text-xs text-ink/50">
                       Datos de Discogs.{" "}
