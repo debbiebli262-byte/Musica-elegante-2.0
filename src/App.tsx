@@ -129,6 +129,7 @@ interface ImportJobRecord {
   extractedData?: ParsedWordImport;
   approvedAt?: string;
   source?: string;
+  importGenre?: Genre;
   reviewedEditions?: ReviewedEdition[];
   dataUrl?: string;
   completedAlbumIds?: string[];
@@ -2483,7 +2484,7 @@ function ImportWordPage() {
       await setDoc(jobRef, {
         fileName: selectedFile?.name || parsedData.sourceFileName || previous.data()?.fileName || 'Word',
         createdAt: previous.data()?.createdAt || new Date().toISOString(),
-        status: 'draft', source: 'word_upload',
+        status: 'draft', source: 'word_upload', importGenre:importGenreSelection,
         fileUrl: upload?.downloadURL || previous.data()?.fileUrl || '',
         storagePath: upload?.storagePath || previous.data()?.storagePath || '',
         ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
@@ -2512,6 +2513,7 @@ function ImportWordPage() {
       setSelectedFile(null);setPendingFiles([]);setBatchResults([]);
       setActiveJobId(job.id);
       setActiveParsed(parsed,editions?.length?editions:undefined);
+      setImportGenreSelection(job.importGenre||'classical');
       setMessage('Borrador recuperado. Revisa los datos y descarga un backup nuevo antes de guardar.');
     }catch(error){setMessage('No se pudo recuperar: '+(error instanceof Error?error.message:String(error)));}
   };
@@ -2635,7 +2637,7 @@ function ImportWordPage() {
       await setDoc(jobRef,{
         fileName:selectedFile?.name||parsedData.sourceFileName||'Word',
         createdAt:prior.data()?.createdAt||new Date().toISOString(),
-        source:'word_upload',status:'draft',fileUrl,storagePath,
+        source:'word_upload',status:'draft',fileUrl,storagePath,importGenre:importGenreSelection,
         ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
         completedAlbumIds:prior.data()?.completedAlbumIds||[],
         lastAttemptAt:new Date().toISOString(),
