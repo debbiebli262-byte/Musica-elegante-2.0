@@ -2246,7 +2246,7 @@ async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
 function ImportWordPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [batchResults, setBatchResults] = useState<Array<{file:File;data:ParsedWordImport|null;error:string}>>([]);
+  const [batchResults, setBatchResults] = useState<Array<{file:File;data:ParsedWordImport|null;error:string;editions?:ReviewedEdition[]}>>([]);
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
   const [reviewedEditions, setReviewedEditions] = useState<ReviewedEdition[]>([]);
   const [existingArtist, setExistingArtist] = useState<Artist | null>(null);
@@ -2346,8 +2346,10 @@ function ImportWordPage() {
   const activateBatch = (index:number)=>{
     const item=batchResults[index];
     if(!item)return;
+    setBatchResults(current=>current.map((entry,i)=>i===currentBatchIndex
+      ? {...entry,data:parsedData,editions:reviewedEditions}:entry));
     setCurrentBatchIndex(index);setSelectedFile(item.file);setActiveJobId('');
-    setActiveParsed(item.data);
+    setActiveParsed(item.data,item.editions);
     setMessage(item.error||`Revisando ${item.file.name}`);
   };
   useEffect(()=>{
