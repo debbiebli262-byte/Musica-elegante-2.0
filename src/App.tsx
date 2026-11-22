@@ -2675,14 +2675,14 @@ function ImportWordPage() {
           </div>
 
           <label className="block rounded-2xl border border-dashed border-ink/20 bg-ink/[0.03] p-6 hover:border-gold/50 transition-colors">
-            <input type="file" accept=".docx" className="hidden" onChange={handleFileChange} />
+            <input type="file" accept=".docx" multiple className="hidden" onChange={handleFileChange} />
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-ink text-paper flex items-center justify-center">
                 <Upload size={20} />
               </div>
               <div>
-                <p className="font-medium text-ink">{selectedFile ? selectedFile.name : 'Haz clic para elegir un archivo Word'}</p>
-                <p className="text-sm text-ink/50">Formato admitido: .docx</p>
+                <p className="font-medium text-ink">{pendingFiles.length ? pendingFiles.map(file=>file.name).join(' · ') : 'Haz clic para elegir uno o varios archivos Word'}</p>
+                <p className="text-sm text-ink/50">Archivos .docx (hasta 8 MB por archivo) · Selección múltiple</p>
               </div>
             </div>
           </label>
@@ -2717,25 +2717,31 @@ function ImportWordPage() {
             <button
               type="button"
               onClick={handleProcessFile}
-              disabled={!selectedFile || isUploading}
+              disabled={!pendingFiles.length || isUploading}
               className="px-6 py-3 rounded-full bg-ink text-paper text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gold transition-colors"
             >
-              {isUploading ? 'Procesando…' : 'Procesar con AI'}
+              {isUploading ? 'Procesando…' : 'Procesar archivos con AI'}
             </button>
 
             <button
               type="button"
               onClick={handleSaveDraft}
-              disabled={!parsedData || isSavingDraft}
+              disabled={!parsedData || isSavingDraft || isApproving}
               className="px-6 py-3 rounded-full border border-ink/15 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-ink hover:text-paper transition-colors"
             >
               {isSavingDraft ? 'Guardando…' : 'Guardar borrador'}
             </button>
 
+            <button type="button" onClick={prepareWordBackup} disabled={!parsedData || isApproving || isSavingDraft}
+              className="rounded-full border border-ink/20 px-5 py-3 text-sm font-medium disabled:opacity-40">
+              {backupReady ? 'Descargar backup actualizado ✓' : 'Descargar backup antes de guardar'}
+            </button>
+            {backupDetails && <p role="status" className="w-full text-xs text-ink/60">{backupDetails}</p>}
+
             <button
               type="button"
               onClick={handleApproveAndSave}
-              disabled={!parsedData || isApproving}
+              disabled={!parsedData || isApproving || !backupReady || pendingReviewConflicts(reviewedEditions).length>0}
               className="px-6 py-3 rounded-full bg-gold text-ink text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-95 transition-all"
             >
               {isApproving ? 'Guardando…' : 'Aprobar y guardar'}
@@ -2791,6 +2797,22 @@ function ImportWordPage() {
             </ol>
           </div>
 
+          {batchResults.length>0 && (
+            <div className="rounded-2xl border border-ink/10 p-4 space-y-3">
+              <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Archivos del lote</h3>
+              <div className="flex flex-wrap gap-2">
+                {batchResults.map((item,index)=>(
+                  <button key={index} type="button" onClick={()=>activateBatch(index)}
+                    className={cn('rounded-full px-3 py-2 text-xs border',
+                      currentBatchIndex===index?'border-gold bg-gold/10':'border-ink/15')}>
+                    {item.data?'✓':'!'} {item.file.name}
+                  </button>
+                ))}
+              </div>
+              {batchResults[currentBatchIndex]?.error && <p role="alert" className="text-xs text-red-600">{batchResults[currentBatchIndex].error}</p>}
+              <p className="text-xs text-ink/50">Cada Word se revisa y guarda por separado; cambiar de archivo no fusiona artistas diferentes.</p>
+            </div>
+          )}
           {message ? (
             <div className="rounded-2xl border border-ink/10 bg-paper p-4 text-sm text-ink/75">{message}</div>
           ) : null}
@@ -2815,9 +2837,38 @@ function ImportWordPage() {
                     <div className="rounded-2xl bg-ink/[0.03] p-4"><span className="text-ink/45">Nacimiento</span><div className="font-medium mt-1">{extractedArtist?.birthDate || '—'} {extractedArtist?.birthPlace ? `· ${extractedArtist.birthPlace}` : ''}</div></div>
                     <div className="rounded-2xl bg-ink/[0.03] p-4"><span className="text-ink/45">Fallecimiento</span><div className="font-medium mt-1">{extractedArtist?.deathDate || '—'} {extractedArtist?.deathPlace ? `· ${extractedArtist.deathPlace}` : ''}</div></div>
                   </div>
-                  <div className="rounded-2xl bg-ink/[0.03] p-4 text-sm">
-                    <span className="text-ink/45">Biografía</span>
-                    <p className="mt-2 leading-relaxed text-ink/75">{extractedArtist?.biography || '—'}</p>
+                  <div className="rounded-2xl border border-ink/10 p-4 space-y-4">
+                    <h4 className="font-medium text-sm">Biografía · Comparar antes de guardar</h4>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-ink/[0.03] p-3">
+                        <p className="text-xs uppercase tracking-widest text-ink/40 mb-2">Actual en el catálogo</p>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{existingArtist?.biography || 'Sin biografía guardada'}</p>
+                      </div>
+                      <div className="rounded-xl bg-gold/[0.06] p-3">
+                        <p className="text-xs uppercase tracking-widest text-gold mb-2">Del documento Word</p>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{extractedArtist?.biography || 'Sin biografía en el Word'}</p>
+                      </div>
+                    </div>
+                    {existingArtist?.biography?.trim() ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-ink/60">Elige qué hacer con la biografía existente:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {([['keep','Conservar actual'],['replace','Reemplazar con Word'],['edit','Editar/combinar']] as const).map(([value,label])=>(
+                            <button type="button" key={value} aria-pressed={biographyChoice===value}
+                              onClick={()=>{setBiographyChoice(value);markReviewChanged();}}
+                              className={cn('rounded-full border px-4 py-2 text-xs',
+                                biographyChoice===value?'bg-ink text-paper border-ink':'border-ink/15')}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : <p className="text-xs text-ink/60">No hay biografía existente: se añadirá la del Word, sin sobrescribir datos.</p>}
+                    {biographyChoice==='edit' && (
+                      <textarea aria-label="Biografía editada" rows={7} value={biographyDraft}
+                        onChange={event=>{setBiographyDraft(event.target.value);markReviewChanged();}}
+                        className="w-full rounded-xl border border-ink/10 bg-white p-3 text-sm leading-relaxed"/>
+                    )}
                   </div>
                 </div>
 
