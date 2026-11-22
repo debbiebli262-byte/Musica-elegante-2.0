@@ -69,8 +69,8 @@ export function sameWordEdition(album: WordAlbumCandidate, rec: WordRecordingRef
   if (rec.barcode && album.barcode && norm(rec.barcode) !== norm(album.barcode)) return false;
   if (rec.label && album.label && norm(rec.label) !== norm(album.label)) return false;
   if (rec.format && album.format) {
-    const normalizedFormat = (value:string) => /(?:^|\\W)CDs?(?:\\W|$)/i.test(value) ? 'CD' :
-      /(?:^|\\W)(?:vinyl|vinilo|LPs?)(?:\\W|$)/i.test(value) ? 'Vinilo' : norm(value);
+    const normalizedFormat = (value:string) => /(?:^|\W)CDs?(?:\W|$)/i.test(value) ? 'CD' :
+      /(?:^|\W)(?:vinyl|vinilo|LPs?)(?:\W|$)/i.test(value) ? 'Vinilo' : norm(value);
     if (normalizedFormat(rec.format) !== normalizedFormat(album.format)) return false;
   }
   return Boolean(
