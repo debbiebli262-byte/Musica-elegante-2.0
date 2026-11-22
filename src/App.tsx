@@ -2250,6 +2250,7 @@ function ImportWordPage() {
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
   const [reviewedEditions, setReviewedEditions] = useState<ReviewedEdition[]>([]);
   const [existingArtist, setExistingArtist] = useState<Artist | null>(null);
+  const [catalogForReview, setCatalogForReview] = useState<Album[]>([]);
   const [biographyChoice, setBiographyChoice] = useState<'keep'|'replace'|'edit'>('keep');
   const [biographyDraft, setBiographyDraft] = useState('');
   const [backupReady, setBackupReady] = useState(false);
@@ -2353,6 +2354,14 @@ function ImportWordPage() {
     setMessage(item.error||`Revisando ${item.file.name}`);
   };
   useEffect(()=>{
+    if(!parsedData){setCatalogForReview([]);return;}
+    let active=true;
+    getDocs(collection(db,'albums')).then(snapshot=>{
+      if(active)setCatalogForReview(snapshot.docs.map(item=>({id:item.id,...item.data()} as Album)));
+    }).catch(()=>{if(active)setMessage('No se pudo revisar el catálogo existente. Comprueba la conexión.');});
+    return()=>{active=false;};
+  },[parsedData?.sourceFileName, parsedData?.composer?.name]);
+  useEffect(()=>{
     const name=parsedData?.composer?.name?.trim();
     if(!name){setExistingArtist(null);return;}
     let active=true;
@@ -2377,10 +2386,10 @@ function ImportWordPage() {
       const result = await response.json();
       if (!response.ok) throw new Error(result?.error || 'No se encontró en Discogs.');
       const candidates = (Array.isArray(result.candidates) ? result.candidates : []).filter((item: {labels:string[];formats:string[]}) => {
-        const labelMatch = !album.label || item.labels.some(label => label.toLowerCase() === album.label.toLowerCase());
+        // Keep alternative labels visible: a different sello is a review conflict, not a hidden result.
         const documentFormat = normalizePhysicalFormat(album.format);
         const formatMatch = !documentFormat || item.formats.some(format => normalizePhysicalFormat(format) === documentFormat);
-        return labelMatch && formatMatch;
+        return formatMatch;
       });
       setDiscogsMatches(current => ({...current, [key]: candidates}));
       setEnrichMessage(candidates.length ? 'Elige la edición exacta antes de completar sus datos.' :
@@ -2892,6 +2901,12 @@ function ImportWordPage() {
                   {albumsForImport.map((candidate, index) => {
                     const key=candidate.sourceKey;
                     const matches=discogsMatches[key]||[];
+                    const existingEdition=catalogForReview.find(album=>
+                      Boolean(candidate.discogsReleaseId && album.discogsReleaseId===candidate.discogsReleaseId) ||
+                      Boolean(candidate.catalogNumber && album.catalogNumber===candidate.catalogNumber &&
+                        album.label?.toLowerCase().trim()===candidate.label.toLowerCase().trim() &&
+                        (!candidate.editionYear || !album.releaseYear || album.releaseYear===candidate.editionYear) &&
+                        normalizePhysicalFormat(album.formats?.[0]||'')===normalizePhysicalFormat(candidate.format)));
                     const fields: Array<[ReviewField,string]> = [
                       ['title','Título del álbum'], ['label','Sello de tu ejemplar'],
                       ['catalogNumber','Nº de catálogo'],['barcode','Barcode'],
@@ -2965,6 +2980,13 @@ function ImportWordPage() {
                                 className="rounded-xl bg-ink text-paper px-4 py-2 text-xs disabled:opacity-40">Aplicar edición</button>
                             </div>
                           )}
+                        </div>
+                      )}
+                      {existingEdition && (
+                        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                          <p className="text-xs font-semibold text-amber-900">Posible edición existente · Se omitirá en vez de sobrescribir</p>
+                          <p className="text-xs text-ink/65">{existingEdition.title} · {existingEdition.label||'Sin sello'} · {existingEdition.catalogNumber||'Sin catálogo'} · {existingEdition.releaseYear||'s/f'}</p>
+                          <p className="text-xs text-ink/50">Puedes revisar el álbum existente desde el catálogo. Esta importación nunca modifica esa ficha automáticamente.</p>
                         </div>
                       )}
                       {candidate.conflicts.length>0&&(
