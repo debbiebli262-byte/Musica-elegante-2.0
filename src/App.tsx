@@ -3458,6 +3458,13 @@ function DiscogsImportPage() {
   const [editionLabel, setEditionLabel] = useState('');
   const [editionFormat, setEditionFormat] = useState<'CD' | 'Vinilo' | ''>('');
   const [editionReleaseId, setEditionReleaseId] = useState('');
+  const [editionMode, setEditionMode] = useState<'discogs' | 'manual'>('discogs');
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualArtist, setManualArtist] = useState('');
+  const [manualCatalog, setManualCatalog] = useState('');
+  const [manualYear, setManualYear] = useState('');
+  const [manualCountry, setManualCountry] = useState('');
+  const [manualDiscCount, setManualDiscCount] = useState(1);
   const [editionLoading, setEditionLoading] = useState(false);
   const [editionError, setEditionError] = useState('');
   const [catalogNumber, setCatalogNumber] = useState('');
@@ -3523,6 +3530,13 @@ function DiscogsImportPage() {
     setEditionLabel('');
     setEditionFormat('');
     setEditionReleaseId('');
+    setEditionMode('discogs');
+    setManualTitle('');
+    setManualArtist('');
+    setManualCatalog('');
+    setManualYear('');
+    setManualCountry('');
+    setManualDiscCount(1);
     setEditionError('');
     setCatalogNumber('');
     setOriginalCatalogNumber('');
@@ -3641,6 +3655,47 @@ function DiscogsImportPage() {
 
   const matchingCandidates = matchingDiscogsEditions(editionCandidates, editionLabel, editionFormat);
 
+  const confirmManualEdition = () => {
+    if (!manualTitle.trim() || !manualArtist.trim() || !editionLabel.trim() || !editionFormat) {
+      setEditionError('Completa el título, artista, sello de tu ejemplar y formato.');
+      return;
+    }
+    // A manually identified copy must not inherit edition-specific metadata from a search result.
+    setTitle(manualTitle.trim());
+    setArtistName(manualArtist.trim());
+    setSelectedArtistNames([manualArtist.trim()]);
+    setLabel(editionLabel.trim());
+    setDiscogsLabelOptions([]);
+    setFormats([editionFormat]);
+    setCatalogNumber(manualCatalog.trim());
+    setEditionCatalogNumber(manualCatalog.trim());
+    setReleaseYear(manualYear.trim());
+    setEditionDate(manualYear.trim());
+    setCountry(manualCountry.trim());
+    setDiscCount(manualDiscCount);
+    setReleaseDate('');
+    setRecordingDates('');
+    setLocation('');
+    setImageUrl('');
+    setDiscogsUrl('');
+    setOriginalLabel('');
+    setOriginalCatalogNumber('');
+    setOriginalYear('');
+    setOrchestra('');
+    setConductor('');
+    setProducer('');
+    setEngineer('');
+    setMasteringEngineer('');
+    setTracks([]);
+    setDiscs([]);
+    setEditionReleaseId('');
+    setCollectionStatus('owned');
+    setEditionConfirmed(true);
+    setEditionDialogOpen(false);
+    setEditionError('');
+    setMessage('Edición manual preparada. Completa los datos antes de guardar. No se atribuye a Discogs.');
+  };
+
   const confirmEdition = async () => {
     const selectedId = editionReleaseId || (matchingCandidates.length === 1 ? String(matchingCandidates[0].id) : '');
     if (!editionLabel || !editionFormat || !selectedId ||
@@ -3694,6 +3749,13 @@ function DiscogsImportPage() {
 
       applyDiscogsData(data, value);
       setEditionCandidates(Array.isArray(data.candidates) ? data.candidates : []);
+      setEditionMode('discogs');
+      setManualTitle(String(data.title || ''));
+      setManualArtist(String(data.primaryArtist || data.artist || ''));
+      setManualCatalog('');
+      setManualYear('');
+      setManualCountry('');
+      setManualDiscCount(1);
       setEditionConfirmed(false);
       setEditionDialogOpen(true);
       setEditionLabel('');
@@ -3702,7 +3764,26 @@ function DiscogsImportPage() {
       setEditionError('');
     } catch (error: any) {
       console.error('Discogs import error:', error);
-      setImportError(error.message || 'No se pudo obtener información desde Discogs.');
+      if (String(error.message || '').includes('No Discogs release found')) {
+        setTitle('');
+        setArtistName('');
+        setSelectedArtistNames([]);
+        setEditionCandidates([]);
+        setEditionMode('manual');
+        setManualTitle('');
+        setManualArtist('');
+        setManualCatalog(searchMode === 'catno' ? value : '');
+        setManualYear('');
+        setManualCountry('');
+        setManualDiscCount(1);
+        setEditionLabel('');
+        setEditionFormat('');
+        setEditionReleaseId('');
+        setEditionDialogOpen(true);
+        setImportError('');
+      } else {
+        setImportError(error.message || 'No se pudo obtener información desde Discogs.');
+      }
     } finally {
       setLoading(false);
     }
@@ -3714,10 +3795,12 @@ function DiscogsImportPage() {
     const candidateCat = normalized(catalogNumber);
     for (const albumDoc of snapshot.docs) {
       const existing = albumDoc.data() as Album & { discogsReleaseId?: number };
-      if (existing.discogsReleaseId && existing.discogsReleaseId === Number(editionReleaseId)) return albumDoc.id;
+      if (editionMode === 'discogs' && editionReleaseId &&
+          existing.discogsReleaseId === Number(editionReleaseId)) return albumDoc.id;
       const sameEdition = normalized(existing.title) === normalized(title) &&
         normalized(existing.catalogNumber) === candidateCat &&
         normalized(existing.label) === normalized(label) &&
+        normalized(existing.releaseYear) === normalized(releaseYear) &&
         existing.formats?.includes(formats[0]);
       if (sameEdition) return albumDoc.id;
     }
@@ -3734,7 +3817,7 @@ function DiscogsImportPage() {
     const artistsToSave: string[] = Array.from(new Set<string>(selectedArtistNames.map(name => normalizeArtistName(name)).filter(name => name.length > 0)));
     const mainArtistName = normalizeArtistName(artistName || artistsToSave[0] || '');
 
-    if (discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
+    if (editionMode === 'discogs' && discogsLabelOptions.length > 1 && !discogsLabelOptions.includes(label)) {
       setImportError('Selecciona el sello discográfico de tu edición antes de guardar.');
       return;
     }
@@ -3781,8 +3864,11 @@ function DiscogsImportPage() {
         resolvedArtistIds.push(artistId);
       }
 
-      // Discogs ID distinguishes CD and vinyl releases sharing a catalog number.
-      const albumId = slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
+      // Manual editions have no Discogs release ID and use an independent catalog identity.
+      const manualIdentity = [catalogNumber || 'sin-catalogo', label, formats[0] || '', country].join('-');
+      const albumId = editionMode === 'manual'
+        ? slugifyAlbumId(mainArtistName, title, releaseYear, manualIdentity) + '_manual'
+        : slugifyAlbumId(mainArtistName, title, releaseYear, catalogNumber) + '_discogs_' + editionReleaseId;
       const albumRef = doc(db, 'albums', albumId);
       const existingExactId = await getDoc(albumRef);
       if (existingExactId.exists()) {
@@ -3790,7 +3876,8 @@ function DiscogsImportPage() {
         return;
       }
       await setDoc(albumRef, {
-        discogsReleaseId: Number(editionReleaseId),
+        ...(editionMode === 'discogs' ? { discogsReleaseId: Number(editionReleaseId) } : {}),
+        importSource: { method: editionMode === 'manual' ? 'manual-edition' : 'Discogs' },
         artistId: mainArtistId,
         artistName: mainArtistName,
         allArtistIds: Array.from(new Set(resolvedArtistIds)),
