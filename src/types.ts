@@ -4,6 +4,7 @@ export interface Artist {
   id: string;
   name: string;
   biography?: string;
+  nationality?: string;
   imageUrl?: string;
   genre: Genre;
   birthDate?: string; // YYYY-MM-DD
@@ -126,6 +127,10 @@ export interface Album {
   engineer?: string;
   producer?: string;
   musicians?: Musician[];
+  unassignedWorks?: Work[]; // Works whose physical disc number is not verified
+  importSource?: { fileName: string; method: string; discogsReleaseId?: number; fieldOrigins?: Record<string, string> };
+  barcode?: string;
+  discogsReleaseId?: number;
   tracks?: Track[]; // Kept for Jazz
   discs?: Disc[]; // Added for Classical
   anecdotes?: string;

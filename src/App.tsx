@@ -11,7 +11,8 @@ import { fetchArtistDiscography } from './services/discographyService';
 import { fetchArtistMetadata } from './services/artistService';
 import { findArtistPortrait, useArtistPortrait } from './services/artistImages';
 import { normalizeRecordLabels } from './utils/recordLabels';
-import { wordAlbumCandidates, sameWordEdition, mayReplaceBiography, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
+import { wordAlbumCandidates, sameWordEdition, normalizedEditionKey, type WordAlbumCandidate } from './utils/wordImportAlbums';
+import { makeReview, editReviewField, reviewDiscogsMatch, resolveReviewConflict, pendingReviewConflicts, normalizePhysicalFormat, splitReviewedWorks, fileBackupFilename, type ReviewedEdition, type ReviewField } from './utils/wordImportReview';
 import { discogsPhysicalFormat, matchingDiscogsEditions, type DiscogsEditionCandidate } from './utils/discogsEdition';
 import { groupArtistAlbums, uniqueCollectionItems, linkedArtistIds } from './utils/albumLinks';
 import { validateAlbumSave, artistNameUpdate } from './utils/albumSaveValidation';
@@ -92,6 +93,7 @@ interface ServerRecording {
   editionYear?: string;
   country?: string;
   notes?: string;
+  discNumber?: number;
 }
 
 interface ServerComposer {
@@ -115,6 +117,8 @@ interface ParsedWordImport {
   recordings?: ServerRecording[];
   warnings?: string[];
   sourceFileName?: string;
+  sourceType?: 'structured-word' | 'ai-chunks';
+  chunkCount?: number;
 }
 
 interface ImportJobRecord {
@@ -125,6 +129,12 @@ interface ImportJobRecord {
   extractedData?: ParsedWordImport;
   approvedAt?: string;
   source?: string;
+  importGenre?: Genre;
+  reviewedEditions?: ReviewedEdition[];
+  dataUrl?: string;
+  completedAlbumIds?: string[];
+  storagePath?: string;
+  fileUrl?: string;
 }
 
 
@@ -2208,6 +2218,17 @@ async function uploadWordFileToStorage(file: File) {
   return { storagePath, downloadURL };
 }
 
+/** Firestore has a 1 MiB/document limit. Large reviews live in authenticated Storage. */
+async function persistWordReview(jobId:string, parsed:ParsedWordImport, editions:ReviewedEdition[]) {
+  const serialized=JSON.stringify({extractedData:parsed,reviewedEditions:editions});
+  if(new TextEncoder().encode(serialized).length<600000){
+    return {extractedData:parsed,reviewedEditions:editions,dataUrl:''};
+  }
+  const place=ref(storage,'imports/word/reviews/'+jobId+'.json');
+  const snapshot=await uploadBytes(place,new Blob([serialized],{type:'application/json'}));
+  return {extractedData:null,reviewedEditions:[],dataUrl:await getDownloadURL(snapshot.ref)};
+}
+
 async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
   const formData = new FormData();
   formData.append('file', file);
@@ -2237,6 +2258,19 @@ async function uploadWordDocument(file: File): Promise<ParsedWordImport> {
 
 function ImportWordPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [batchResults, setBatchResults] = useState<Array<{file:File;data:ParsedWordImport|null;error:string;editions?:ReviewedEdition[]}>>([]);
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
+  const [reviewedEditions, setReviewedEditions] = useState<ReviewedEdition[]>([]);
+  const [existingArtist, setExistingArtist] = useState<Artist | null>(null);
+  const [catalogForReview, setCatalogForReview] = useState<Album[]>([]);
+  const [biographyChoice, setBiographyChoice] = useState<'keep'|'replace'|'edit'>('keep');
+  const [biographyDraft, setBiographyDraft] = useState('');
+  const [backupReady, setBackupReady] = useState(false);
+  const [backupDetails, setBackupDetails] = useState('');
+  const [activeJobId, setActiveJobId] = useState('');
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [restorePreview, setRestorePreview] = useState<{artist:Artist|null;albums:Album[]}|null>(null);
   const [parsedData, setParsedData] = useState<ParsedWordImport | null>(null);
   const [recentImports, setRecentImports] = useState<ImportJobRecord[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -2255,7 +2289,24 @@ function ImportWordPage() {
   const [enrichMessage, setEnrichMessage] = useState('');
   const [batchSearching, setBatchSearching] = useState(false);
   const extractedCandidates = wordAlbumCandidates(parsedData?.albums || [], parsedData?.recordings || []);
-  const albumsForImport = extractedCandidates.map(item => enrichedWordAlbums[normalizedEditionKey(item)] || item);
+  const albumsForImport = reviewedEditions;
+  const markReviewChanged = () => { setBackupReady(false); setBackupDetails(''); };
+  const updateReviewedEdition = (key:string, change:(edition:ReviewedEdition)=>ReviewedEdition) => {
+    setReviewedEditions(current=>current.map(item=>item.sourceKey===key?change(item):item));
+    markReviewChanged();
+  };
+  const setActiveParsed = (result:ParsedWordImport|null, editions?:ReviewedEdition[]) => {
+    setParsedData(result);
+    setReviewedEditions(editions || (result?wordAlbumCandidates(result.albums||[],result.recordings||[]).map(makeReview):[]));
+    setExistingArtist(null);
+    setBiographyChoice('keep');
+    setBiographyDraft(result?.composer?.biography||'');
+    setDiscogsMatches({});
+    setDiscogsSelection({});
+    setEnrichedWordAlbums({});
+    setBackupReady(false);
+    setBackupDetails('');
+  };
 
   useEffect(() => {
     const importsQuery = query(collection(db, 'import_jobs'));
@@ -2270,38 +2321,72 @@ function ImportWordPage() {
   }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] || null;
-    setSelectedFile(file);
-    setParsedData(null);
-    setMessage('');
-    setDiscogsMatches({});
-    setDiscogsSelection({});
-    setEnrichedWordAlbums({});
+    const files = Array.from(event.target.files || []) as File[];
+    const valid = files.filter(file=>file.name.toLowerCase().endsWith('.docx') && file.size <= 8*1024*1024);
+    setPendingFiles(valid);
+    setSelectedFile(valid[0]||null);
+    setCurrentBatchIndex(0);
+    setBatchResults([]);
+    setActiveJobId('');
+    setActiveParsed(null);
+    setMessage(valid.length!==files.length?'Sólo se admiten .docx de hasta 8 MB. Se omitieron archivos no válidos.':'');
     setEnrichMessage('');
   };
 
   const handleProcessFile = async () => {
-    if (!selectedFile) {
-      setMessage('Selecciona un archivo .docx antes de continuar.');
+    if (!pendingFiles.length) {
+      setMessage('Selecciona uno o varios archivos .docx antes de continuar.');
       return;
     }
-
-    setIsUploading(true);
-    setMessage('');
-
-    try {
-      const result = await uploadWordDocument(selectedFile);
-      setParsedData(result);
-      setMessage('Archivo procesado. Revisa los datos antes de guardarlos.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'No se pudo procesar el archivo.');
-    } finally {
-      setIsUploading(false);
+    setIsUploading(true);setIsBatchProcessing(true);setMessage('');
+    const results:Array<{file:File;data:ParsedWordImport|null;error:string}>=[];
+    for(const [index,file] of pendingFiles.entries()){
+      setMessage(`Procesando archivo ${index+1}/${pendingFiles.length}: ${file.name}`);
+      try {
+        const data=await uploadWordDocument(file);
+        results.push({file,data,error:''});
+      }catch(error){
+        results.push({file,data:null,error:error instanceof Error?error.message:String(error)});
+      }
     }
+    setBatchResults(results);
+    const first=results.findIndex(item=>Boolean(item.data));
+    if(first>=0){
+      setCurrentBatchIndex(first);setSelectedFile(results[first].file);
+      setActiveParsed(results[first].data);
+    }
+    setMessage(`${results.filter(r=>r.data).length}/${results.length} archivo(s) procesados. Revisa y aprueba cada documento por separado.`);
+    setIsUploading(false);setIsBatchProcessing(false);
   };
+  const activateBatch = (index:number)=>{
+    const item=batchResults[index];
+    if(!item)return;
+    setBatchResults(current=>current.map((entry,i)=>i===currentBatchIndex
+      ? {...entry,data:parsedData,editions:reviewedEditions}:entry));
+    setCurrentBatchIndex(index);setSelectedFile(item.file);setActiveJobId('');
+    setActiveParsed(item.data,item.editions);
+    setMessage(item.error||`Revisando ${item.file.name}`);
+  };
+  useEffect(()=>{
+    if(!parsedData){setCatalogForReview([]);return;}
+    let active=true;
+    getDocs(collection(db,'albums')).then(snapshot=>{
+      if(active)setCatalogForReview(snapshot.docs.map(item=>({id:item.id,...item.data()} as Album)));
+    }).catch(()=>{if(active)setMessage('No se pudo revisar el catálogo existente. Comprueba la conexión.');});
+    return()=>{active=false;};
+  },[parsedData?.sourceFileName, parsedData?.composer?.name]);
+  useEffect(()=>{
+    const name=parsedData?.composer?.name?.trim();
+    if(!name){setExistingArtist(null);return;}
+    let active=true;
+    getArtistByName(name).then(artist=>{
+      if(active) setExistingArtist(artist||null);
+    }).catch(()=>{if(active)setMessage('No se pudo comprobar si el artista ya existe; no guardes hasta revisar la conexión.');});
+    return()=>{active=false};
+  },[parsedData?.composer?.name]);
 
-  const lookupWordAlbum = async (album: WordAlbumCandidate) => {
-    const key = normalizedEditionKey(album);
+  const lookupWordAlbum = async (album: ReviewedEdition) => {
+    const key = album.sourceKey;
     const identifier = album.barcode || album.catalogNumber;
     if (!identifier) {
       setEnrichMessage('El álbum necesita un código de barras o número de catálogo para buscar en Discogs.');
@@ -2315,11 +2400,10 @@ function ImportWordPage() {
       const result = await response.json();
       if (!response.ok) throw new Error(result?.error || 'No se encontró en Discogs.');
       const candidates = (Array.isArray(result.candidates) ? result.candidates : []).filter((item: {labels:string[];formats:string[]}) => {
-        const labelMatch = !album.label || item.labels.some(label => label.toLowerCase() === album.label.toLowerCase());
-        const documentFormat = album.format.toLowerCase();
-        const formatMatch = !documentFormat || item.formats.some(format =>
-          format.toLowerCase().includes(documentFormat) || documentFormat.includes(format.toLowerCase()));
-        return labelMatch && formatMatch;
+        // Keep alternative labels visible: a different sello is a review conflict, not a hidden result.
+        const documentFormat = normalizePhysicalFormat(album.format);
+        const formatMatch = !documentFormat || item.formats.some(format => normalizePhysicalFormat(format) === documentFormat);
+        return formatMatch;
       });
       setDiscogsMatches(current => ({...current, [key]: candidates}));
       setEnrichMessage(candidates.length ? 'Elige la edición exacta antes de completar sus datos.' :
@@ -2332,7 +2416,7 @@ function ImportWordPage() {
   };
 
   const searchAllWordAlbums = async () => {
-    const searchables = extractedCandidates.filter(album => album.barcode || album.catalogNumber);
+    const searchables = reviewedEditions.filter(album => album.include && (album.barcode || album.catalogNumber));
     if (!searchables.length) {
       setEnrichMessage('No hay números de catálogo ni códigos de barras para buscar.');
       return;
@@ -2350,8 +2434,8 @@ function ImportWordPage() {
     }
   };
 
-  const confirmWordDiscogsRelease = async (album: WordAlbumCandidate) => {
-    const key = normalizedEditionKey(album);
+  const confirmWordDiscogsRelease = async (album: ReviewedEdition) => {
+    const key = album.sourceKey;
     const releaseId = discogsSelection[key];
     if (!releaseId || !discogsMatches[key]?.some(item => String(item.id) === releaseId)) return;
     setEnrichingAlbum(key);
@@ -2360,27 +2444,20 @@ function ImportWordPage() {
       const response = await privateApiFetch('/api/discogs-search-by-catalog?releaseId=' + encodeURIComponent(releaseId));
       const found = await response.json();
       if (!response.ok) throw new Error(found?.error || 'No se pudo cargar la edición.');
-      if (album.catalogNumber && found.catno &&
-          album.catalogNumber.replace(/[\s-]/g, '').toLowerCase() !==
-          String(found.catno).replace(/[\s-]/g, '').toLowerCase()) {
-        throw new Error('El número de catálogo no coincide con el documento. Revisa la edición.');
+      const selectedCandidate=discogsMatches[key].find(item=>String(item.id)===releaseId);
+      if(!selectedCandidate)throw new Error('La edición no está entre las opciones verificadas.');
+      const releaseFormat=selectedCandidate.formats.map(normalizePhysicalFormat).find(Boolean);
+      if(album.format && releaseFormat && normalizePhysicalFormat(album.format)!==releaseFormat) {
+        throw new Error('El formato elegido no coincide con el ejemplar del Word. Selecciona la edición correcta.');
       }
-      setEnrichedWordAlbums(current => ({...current, [key]: {
-        ...album,
-        title: album.title || found.title || '',
-        label: album.label || String(found.label || '').split(',')[0].trim(),
-        catalogNumber: album.catalogNumber || found.catno || '',
-        editionYear: album.editionYear || String(found.year || ''),
-        country: album.country || found.country || '',
-        discCount: album.discCount || found.discCount || 1,
-        imageUrl: found.coverImage || found.thumb || '',
-        discogsReleaseId: Number(releaseId),
-        discs: Array.isArray(found.discs) ? found.discs : [],
-        tracks: Array.isArray(found.tracks) ? found.tracks : [],
-        producer: found.producer || '', engineer: found.engineer || '',
-        orchestra: found.orchestra || '', conductor: found.conductor || '',
-      }}));
-      setEnrichMessage('Edición verificada en Discogs. Los datos del Word tienen prioridad.');
+      updateReviewedEdition(key,current=>reviewDiscogsMatch(current,{
+        releaseId:Number(releaseId),
+        title:found.title||'',label:String(found.label||'').split(',')[0].trim(),
+        catno:found.catno||'',year:String(found.year||''),country:found.country||'',
+        imageUrl:found.coverImage||found.thumb||'',discCount:found.discCount,
+        discs:Array.isArray(found.discs)?found.discs:[]
+      }));
+      setEnrichMessage('Discogs contrastado. Resuelve los campos contradictorios antes de guardar.');
     } catch (error) {
       setEnrichMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2388,174 +2465,286 @@ function ImportWordPage() {
     }
   };
 
+  const resolveJobId = async () => {
+    if (activeJobId) return activeJobId;
+    if (!selectedFile) throw new Error('Selecciona de nuevo el Word.');
+    const hash = await crypto.subtle.digest('SHA-256', await selectedFile.arrayBuffer());
+    return 'word_' + Array.from(new Uint8Array(hash)).map(value => value.toString(16).padStart(2, '0')).join('');
+  };
   const handleSaveDraft = async () => {
-    if (!selectedFile || !parsedData) return;
-
-    setIsSavingDraft(true);
-    setMessage('');
-
+    if (!parsedData || (!selectedFile && !activeJobId)) return;
+    setIsSavingDraft(true);setMessage('');
     try {
-      const uploadedFile = await uploadWordFileToStorage(selectedFile);
+      const jobId = await resolveJobId(), jobRef = doc(db, 'import_jobs', jobId);
+      const previous = await getDoc(jobRef);
+      if (previous.exists() && previous.data().status === 'approved') {
+        setMessage('Este Word ya fue importado. No se sobrescribirán registros anteriores.');return;
+      }
+      const upload = selectedFile && !previous.data()?.fileUrl ? await uploadWordFileToStorage(selectedFile) : null;
+      await setDoc(jobRef, {
+        fileName: selectedFile?.name || parsedData.sourceFileName || previous.data()?.fileName || 'Word',
+        createdAt: previous.data()?.createdAt || new Date().toISOString(),
+        status: 'draft', source: 'word_upload', importGenre:importGenreSelection,
+        fileUrl: upload?.downloadURL || previous.data()?.fileUrl || '',
+        storagePath: upload?.storagePath || previous.data()?.storagePath || '',
+        ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
+        completedAlbumIds: previous.data()?.completedAlbumIds || [],
+      }, {merge:true});
+      setActiveJobId(jobId);
+      setMessage('Borrador guardado. Se puede recuperar desde el historial.');
+    } catch(error) {
+      setMessage('Error guardando borrador: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {setIsSavingDraft(false);}
+  };
+  const resumeWordJob = async (job:ImportJobRecord) => {
+    if((!job.extractedData&&!job.dataUrl)||job.status==='approved'){
+      setMessage('Este trabajo está aprobado o no tiene datos que reanudar.');return;
+    }
+    try {
+      let parsed=job.extractedData||null,editions=job.reviewedEditions;
+      if(!parsed&&job.dataUrl){
+        const response=await fetch(job.dataUrl);
+        if(!response.ok)throw new Error('No se pudo obtener la revisión guardada.');
+        const payload=await response.json();
+        parsed=payload.extractedData;
+        editions=payload.reviewedEditions;
+      }
+      if(!parsed)throw new Error('Faltan los datos de la revisión.');
+      setSelectedFile(null);setPendingFiles([]);setBatchResults([]);
+      setActiveJobId(job.id);
+      setActiveParsed(parsed,editions?.length?editions:undefined);
+      setImportGenreSelection(job.importGenre||'classical');
+      setMessage('Borrador recuperado. Revisa los datos y descarga un backup nuevo antes de guardar.');
+    }catch(error){setMessage('No se pudo recuperar: '+(error instanceof Error?error.message:String(error)));}
+  };
 
-      await addDoc(collection(db, 'import_jobs'), {
-        fileName: selectedFile.name,
-        createdAt: new Date().toISOString(),
-        status: 'draft',
-        source: 'word_upload',
-        fileUrl: uploadedFile.downloadURL,
-        storagePath: uploadedFile.storagePath,
-        extractedData: parsedData,
-      });
-
-      setMessage('Importación guardada como borrador en Firebase.');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'import_jobs');
-      setMessage('No se pudo guardar la importación como borrador en Firebase.');
-    } finally {
-      setIsSavingDraft(false);
+  const prepareWordBackup = async () => {
+    if (!parsedData?.composer?.name) return;
+    setMessage('');
+    try {
+      const existingPerson = await getArtistByName(parsedData.composer.name);
+      const albums = await getDocs(collection(db, 'albums'));
+      const affected = albums.docs.filter(album => {
+        const data = album.data() as Album;
+        return reviewedEditions.some(edition => edition.include && (
+          edition.discogsReleaseId && data.discogsReleaseId === edition.discogsReleaseId ||
+          (edition.catalogNumber && data.catalogNumber === edition.catalogNumber &&
+            data.label?.trim().toLowerCase() === edition.label.trim().toLowerCase())
+        ));
+      }).map(album => ({id:album.id,...album.data()}));
+      const backup = {
+        savedAt:new Date().toISOString(), sourceFile:selectedFile?.name || parsedData.sourceFileName,
+        note:'Copia de fichas afectadas; no incluye imágenes en Firebase Storage.',
+        existingArtist:existingPerson||null, matchingExistingAlbums:affected,
+        proposedArtist:parsedData.composer, reviewedEditions, recordings:parsedData.recordings||[],
+      };
+      const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}));
+      const anchor=document.createElement('a');anchor.href=url;
+      anchor.download=fileBackupFilename(selectedFile?.name||parsedData.sourceFileName||'import');
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      setBackupReady(true);
+      setBackupDetails(affected.length+' posibles coincidencias existentes. Backup preparado.');
+    } catch(error) {
+      setBackupReady(false);
+      setMessage('Error preparando copia: '+(error instanceof Error?error.message:String(error)));
     }
   };
 
-  const handleApproveAndSave = async () => {
-    if (!selectedFile || !parsedData || isApproving) return;
-    const person = parsedData.composer;
-    const name = person?.name?.trim();
-    if (!name) {
-      setMessage('No se encontró el nombre del artista. Revisa el documento antes de guardar.');
-      return;
-    }
-    const albumsToSave = albumsForImport.filter(item => item.title.trim());
-    if (albumsToSave.length < albumsForImport.length) {
-      setMessage('Hay ediciones sin título. Corrige el Word antes de guardar: no se crearán álbumes sin identificar.');
-      return;
-    }
-    if (!window.confirm(`¿Guardar la ficha de ${name} y ${albumsToSave.length} edición(es) revisadas? No se sobrescribirán álbumes existentes.`)) return;
-
+  const readRestoreBackup = async (event: React.ChangeEvent<HTMLInputElement>)=>{
+    const file=event.target.files?.[0];
+    setRestorePreview(null);
+    if(!file)return;
+    if(file.size>5*1024*1024){setMessage('El backup JSON supera 5 MB; no se ha cargado.');return;}
+    try{
+      const json=JSON.parse(await file.text()) as Record<string,unknown>;
+      const artist=json.existingArtist;
+      const albums=json.matchingExistingAlbums;
+      if(!Array.isArray(albums)||albums.length>300 ||
+         albums.some(item=>!item||typeof item!=='object'||typeof item.id!=='string'||
+           !item.id||item.id.includes('/')||typeof item.title!=='string'||
+           typeof item.artistId!=='string'||!['classical','jazz'].includes(item.genre)) ||
+         (artist!=null && (typeof artist!=='object'||typeof (artist as Artist).id!=='string'||
+           typeof (artist as Artist).name!=='string'||(artist as Artist).id.includes('/')))){
+        throw new Error('El archivo no contiene una copia válida creada por esta pantalla.');
+      }
+      setRestorePreview({artist:artist as Artist|null,albums:albums as Album[]});
+      setMessage('Backup verificado: se restaurarán únicamente fichas ausentes, nunca se sobrescribirán fichas existentes.');
+    }catch(error){setMessage('No se pudo leer el backup: '+(error instanceof Error?error.message:String(error)));}
+    event.target.value='';
+  };
+  const restoreMissingFromBackup = async () => {
+    if(!restorePreview||isApproving)return;
+    if(!window.confirm('¿Restaurar sólo los registros faltantes de este backup? Los datos actuales jamás serán reemplazados.'))return;
     setIsApproving(true);
-    setMessage('');
-    let savedCount = 0;
-    let skippedCount = 0;
-    try {
-      // Look up existing names; using only a generated slug can create two artist records.
-      const existingByName = await getArtistByName(name);
-      const artistId = (existingByName?.id as string | undefined) || slugifyArtistId(name);
-      if (!artistId) throw new Error('El nombre del artista no permite crear un identificador.');
-      const artistRef = doc(db, 'artists', artistId);
-      const artistSnapshot = await getDoc(artistRef);
-      const existing = artistSnapshot.exists() ? artistSnapshot.data() as Partial<Artist> : null;
-      let allowBiographyReplacement = false;
-      const proposedBiography = String(person?.biography || '').trim();
-      if (proposedBiography && existing?.biography?.trim() &&
-          existing.biography.trim() !== proposedBiography) {
-        allowBiographyReplacement = window.confirm(
-          `La ficha de ${name} ya tiene una biografía. ¿Quieres REEMPLAZARLA con el texto completo del Word? Pulsa Cancelar para conservar la actual.`
-        );
-      }
-      const artistChanges: Record<string, unknown> = {
-        ...(existing ? {} : {name, genre: importGenreSelection}),
-      };
-      if (mayReplaceBiography(existing?.biography, proposedBiography, allowBiographyReplacement)) {
-        artistChanges.biography = proposedBiography;
-      }
-      // Fill missing biographical fields only. Never erase information previously saved.
-      for (const field of ['birthDate', 'deathDate', 'birthPlace', 'deathPlace'] as const) {
-        if (!existing?.[field] && person?.[field]) artistChanges[field] = person[field];
-      }
-      if (Object.keys(artistChanges).length) {
-        await setDoc(artistRef, artistChanges, {merge: true});
-      }
-
-      // Existing editions are checked using release identity rather than artist affiliation.
-      const existingAlbumSnapshot = await getDocs(collection(db, 'albums'));
-      const existingAlbums = existingAlbumSnapshot.docs.map(item => item.data() as Album & {
-        discogsReleaseId?: number; barcode?: string;
+    let restored=0,skipped=0;
+    try{
+      const entries:Array<{collectionName:'artists'|'albums';id:string;data:Record<string,unknown>}>=[];
+      if(restorePreview.artist)entries.push({
+        collectionName:'artists',id:restorePreview.artist.id,
+        data:{...restorePreview.artist}
       });
-      const norm = (value: unknown) => String(value || '').normalize('NFKC').trim().toLowerCase().replace(/[\s-]+/g, '');
-      const alreadySaved = (candidate: typeof albumsToSave[number]) => existingAlbums.some(album =>
-        ('discogsReleaseId' in candidate && candidate.discogsReleaseId &&
-          album.discogsReleaseId === candidate.discogsReleaseId) ||
-        (norm(candidate.catalogNumber || candidate.barcode) &&
-          [album.catalogNumber, album.barcode].some(value => norm(value) === norm(candidate.catalogNumber || candidate.barcode)) &&
-          norm(album.label) === norm(candidate.label) &&
-          (album.formats || []).some(format => norm(format) === norm(candidate.format)))
-      );
-
-      for (const candidate of albumsToSave) {
-        if (alreadySaved(candidate)) { skippedCount++; continue; }
-        const candidateKey = normalizedEditionKey(candidate);
-        const editionId = slugifyAlbumId(name, candidate.title, candidate.editionYear,
-          [candidate.label, candidate.catalogNumber, candidate.barcode, candidate.format].filter(Boolean).join('-'));
-        if (!editionId) continue;
-        const targetRef = doc(db, 'albums', editionId);
-        if ((await getDoc(targetRef)).exists()) { skippedCount++; continue; }
-
-        const recordings = (parsedData.recordings || []).filter(item => sameWordEdition(candidate, item));
-        const works: Work[] = recordings.map((rec, index) => ({
-          title: rec.workTitle?.trim() || candidate.title,
-          compositionDate: rec.compositionDate || '',
-          orchestra: rec.orchestra || '',
-          conductor: rec.conductor || '',
-          soloists: (rec.soloists || []).map(soloist => ({name: soloist, instrument: ''})),
-          movements: [{
-            trackNumber: index + 1,
-            title: rec.workSubtitle?.trim() || rec.workTitle?.trim() || candidate.title,
-            duration: '',
-            notes: [rec.opus, rec.premiereDate, rec.notes].filter(Boolean).join(' · '),
-          }],
-        }));
-        const enriched = enrichedWordAlbums[candidateKey];
-        const formatName = candidate.format.toLowerCase();
-        const selectedFormat = formatName.includes('vinyl') || formatName.includes('vinilo') || formatName.includes('lp') ? 'Vinilo'
-          : formatName.includes('cd') ? 'CD' : formatName.includes('dvd') ? 'DVD' : '';
-        await setDoc(targetRef, {
-          artistId, artistName: name, allArtistIds: [artistId],
-          title: candidate.title.trim(), genre: importGenreSelection,
-          releaseYear: candidate.editionYear || '',
-          label: normalizeRecordLabels(candidate.label), catalogNumber: candidate.catalogNumber || '',
-          barcode: candidate.barcode || '', country: candidate.country || '',
-          formats: selectedFormat ? [selectedFormat] : [],
-          discCount: candidate.discCount || 1,
-          recordingDates: recordings.map(rec => rec.recordingDate).filter(Boolean).join('; '),
-          location: recordings.find(rec => rec.recordingLocation)?.recordingLocation || '',
-          orchestra: enriched?.orchestra || recordings.find(rec => rec.orchestra)?.orchestra || '',
-          conductor: enriched?.conductor || recordings.find(rec => rec.conductor)?.conductor || '',
-          producer: enriched?.producer || '', engineer: enriched?.engineer || '',
-          musicians: recordings.flatMap(rec => (rec.performers || []).map(person => ({name: person, instrument: ''}))),
-          discs: importGenreSelection === 'classical'
-            ? (enriched?.discs?.length ? enriched.discs : (works.length ? [{discNumber: 1, works}] : []))
-            : [],
-          tracks: importGenreSelection === 'jazz'
-            ? (enriched?.tracks?.length ? enriched.tracks : recordings.map((rec, index) => ({
-                trackNumber: index + 1, title: rec.workTitle || candidate.title, duration: ''
-              })))
-            : [],
-          anecdotes: [candidate.notes, ...recordings.map(rec => rec.notes)].filter(Boolean).join('\n'),
-          imageUrl: enriched?.imageUrl || '',
-          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
-        });
-        savedCount++;
-        existingAlbums.push({
-          id: editionId, artistId, title: candidate.title, genre: importGenreSelection,
-          label: candidate.label, catalogNumber: candidate.catalogNumber, barcode: candidate.barcode,
-          formats: selectedFormat ? [selectedFormat as 'CD' | 'Vinilo' | 'DVD'] : [],
-          ...(enriched?.discogsReleaseId ? {discogsReleaseId: enriched.discogsReleaseId} : {}),
-        });
-      }
-
-      const uploadedFile = await uploadWordFileToStorage(selectedFile);
-      await addDoc(collection(db, 'import_jobs'), {
-        fileName: selectedFile.name, createdAt: new Date().toISOString(),
-        approvedAt: new Date().toISOString(), status: 'approved',
-        source: 'word_upload', fileUrl: uploadedFile.downloadURL, storagePath: uploadedFile.storagePath,
-        extractedData: parsedData,
+      for(const album of restorePreview.albums)entries.push({
+        collectionName:'albums',id:album.id,data:{...album}
       });
-      setMessage(`✓ ${savedCount} álbum(es) nuevos guardados; ${skippedCount} ediciones existentes omitidas. Ficha del artista actualizada sin borrar datos existentes.`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'artists/albums/import_jobs');
-      setMessage(`Error después de guardar ${savedCount} álbum(es). No repitas el proceso sin revisar el catálogo: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setIsApproving(false);
+      for(const entry of entries){
+        const reference=doc(db,entry.collectionName,entry.id);
+        const created=await runTransaction(db,async tx=>{
+          if((await tx.get(reference)).exists())return false;
+          const {id,...data}=entry.data;
+          tx.set(reference,data);
+          return true;
+        });
+        if(created)restored++;else skipped++;
+      }
+      setMessage('Recuperadas '+restored+' fichas ausentes; '+skipped+
+        ' existentes conservadas. No se han borrado ni sobrescrito datos.');
+      setRestorePreview(null);
+    }catch(error){
+      setMessage('Restauración parcial ('+restored+' fichas). Puedes repetir sin sobrescribir: '+
+        (error instanceof Error?error.message:String(error)));
+    }finally{setIsApproving(false);}
+  };
+  const handleApproveAndSave = async () => {
+    if (!parsedData || isApproving) return;
+    if (!backupReady) {setMessage('Descarga primero el backup de los datos revisados.');return;}
+    if (pendingReviewConflicts(reviewedEditions).length) {
+      setMessage('Resuelve las diferencias entre Word y Discogs antes de guardar.');return;
     }
+    const name=parsedData.composer?.name?.trim();
+    if (!name) {setMessage('Falta el nombre del artista.');return;}
+    const selected=reviewedEditions.filter(edition=>edition.include);
+    if(selected.some(edition=>!edition.title.trim())) {
+      setMessage('Hay ediciones seleccionadas sin título.');return;
+    }
+    if (!selectedFile && !activeJobId) {setMessage('Guarda el borrador primero.');return;}
+    if (!window.confirm('¿Confirmas guardar '+selected.length+' edición(es) revisadas? Nunca se reemplazarán álbumes existentes.')) return;
+    setIsApproving(true);setMessage('');
+    let savedCount=0,skippedCount=0;
+    try {
+      const jobId=await resolveJobId(),jobRef=doc(db,'import_jobs',jobId);
+      const prior=await getDoc(jobRef);
+      if(prior.exists()&&prior.data().status==='approved'){
+        setMessage('Este Word ya fue importado. No se han modificado los datos.');return;
+      }
+      let fileUrl=String(prior.data()?.fileUrl||'');
+      let storagePath=String(prior.data()?.storagePath||'');
+      if(!fileUrl && selectedFile) {
+        const upload=await uploadWordFileToStorage(selectedFile);
+        fileUrl=upload.downloadURL;storagePath=upload.storagePath;
+      }
+      if(!fileUrl) throw new Error('Falta el Word original guardado. Recupera el archivo antes de continuar.');
+      await setDoc(jobRef,{
+        fileName:selectedFile?.name||parsedData.sourceFileName||'Word',
+        createdAt:prior.data()?.createdAt||new Date().toISOString(),
+        source:'word_upload',status:'draft',fileUrl,storagePath,importGenre:importGenreSelection,
+        ...(await persistWordReview(jobId,parsedData,reviewedEditions)),
+        completedAlbumIds:prior.data()?.completedAlbumIds||[],
+        lastAttemptAt:new Date().toISOString(),
+      },{merge:true});
+      setActiveJobId(jobId);
+      const artistInfo=await getArtistByName(name);
+      const artistId=artistInfo?.id||slugifyArtistId(name);
+      if(!artistId)throw new Error('Identificador de artista inválido.');
+      const artistRef=doc(db,'artists',artistId);
+      const currentSnapshot=await getDoc(artistRef);
+      const existing=currentSnapshot.exists()?currentSnapshot.data() as Partial<Artist>:null;
+      const proposedBiography=String(parsedData.composer?.biography||'').trim();
+      const selectedBiography=biographyChoice==='edit'?biographyDraft.trim():proposedBiography;
+      if(existing?.biography?.trim() && biographyChoice!=='keep' &&
+         existing.biography.trim()!==existingArtist?.biography?.trim()){
+        throw new Error('La biografía existente cambió desde la revisión. Vuelve a comparar y descarga otro backup.');
+      }
+      const artistPatch:Record<string,unknown>=existing?{}:{name,genre:importGenreSelection};
+      if(selectedBiography && (!existing?.biography?.trim()||biographyChoice!=='keep')){
+        artistPatch.biography=selectedBiography;
+      }
+      if(!existing?.nationality && parsedData.composer?.nationality)
+        artistPatch.nationality=parsedData.composer.nationality;
+      for(const field of ['birthDate','birthPlace','deathDate','deathPlace'] as const){
+        if(!existing?.[field] && parsedData.composer?.[field]) artistPatch[field]=parsedData.composer[field];
+      }
+      if(Object.keys(artistPatch).length){
+        await runTransaction(db,async tx=>{
+          const fresh=await tx.get(artistRef);
+          const latest=fresh.exists()?fresh.data() as Partial<Artist>:null;
+          const patch={...artistPatch};
+          if(latest?.biography?.trim() && biographyChoice==='keep')delete patch.biography;
+          if(latest?.biography?.trim() && biographyChoice!=='keep' &&
+              latest.biography.trim()!==existing?.biography?.trim()) throw new Error('La biografía cambió al guardar.');
+          for(const field of ['birthDate','birthPlace','deathDate','deathPlace'] as const){
+            if(latest?.[field]) delete patch[field];
+          }
+          if(Object.keys(patch).length) tx.set(artistRef,patch,{merge:true});
+        });
+      }
+
+      const albumsSnapshot=await getDocs(collection(db,'albums'));
+      const inCatalog=albumsSnapshot.docs.map(entry=>({id:entry.id,data:entry.data() as Album}));
+      const normalize=(value:unknown)=>String(value||'').normalize('NFKC').replace(/[\s-]/g,'').trim().toLowerCase();
+      const completed=new Set<string>(prior.data()?.completedAlbumIds||[]);
+      for(const edition of selected) {
+        const physicalFormat=normalizePhysicalFormat(edition.format);
+        const duplicate=inCatalog.find(item=>
+          Boolean(edition.discogsReleaseId && item.data.discogsReleaseId===edition.discogsReleaseId)||
+          Boolean(normalize(edition.catalogNumber||edition.barcode) &&
+            [item.data.catalogNumber,item.data.barcode].some(v=>normalize(v)===normalize(edition.catalogNumber||edition.barcode)) &&
+            normalize(item.data.label)===normalize(edition.label) &&
+            (!edition.editionYear || !item.data.releaseYear || edition.editionYear===item.data.releaseYear) &&
+            physicalFormat && item.data.formats?.some(f=>normalizePhysicalFormat(f)===physicalFormat))
+        );
+        const albumId=duplicate?.id||slugifyAlbumId(name,edition.title,edition.editionYear,
+          [edition.label,edition.catalogNumber,edition.barcode,edition.format].filter(Boolean).join('-'));
+        if(!albumId)throw new Error('No se pudo identificar una edición.');
+        if(completed.has(albumId)||duplicate){skippedCount++;continue;}
+        const related=(parsedData.recordings||[]).filter(rec=>sameWordEdition(edition,rec));
+        const {assigned,unassigned}=splitReviewedWorks(edition,related);
+        const albumRef=doc(db,'albums',albumId);
+        const created=await runTransaction(db,async tx=>{
+          if((await tx.get(albumRef)).exists())return false;
+          tx.set(albumRef,{
+            artistId,artistName:name,allArtistIds:[artistId],genre:importGenreSelection,title:edition.title,
+            releaseYear:edition.editionYear,country:edition.country,
+            label:normalizeRecordLabels(edition.label),originalLabel:edition.originalLabel||'',
+            catalogNumber:edition.catalogNumber,barcode:edition.barcode,
+            discCount:edition.discCount,formats:physicalFormat?[physicalFormat]:[],
+            recordingDates:related.map(r=>r.recordingDate).filter(Boolean).join('; '),
+            location:related.find(r=>r.recordingLocation)?.recordingLocation||'',
+            orchestra:related.find(r=>r.orchestra)?.orchestra||'',
+            conductor:related.find(r=>r.conductor)?.conductor||'',
+            musicians:related.flatMap(r=>(r.performers||[]).map(name=>({name,instrument:''}))),
+            discs:importGenreSelection==='classical'?(edition.discs?.length?edition.discs:assigned):[],
+            unassignedWorks:importGenreSelection==='classical'?unassigned:[],
+            tracks:importGenreSelection==='jazz'?related.map((r,i)=>({
+              trackNumber:i+1,title:r.workTitle||edition.title,duration:''})):[],
+            anecdotes:[edition.notes,...related.map(r=>r.notes)].filter(Boolean).join('\n'),
+            imageUrl:edition.imageUrl||'',
+            importSource:{fileName:selectedFile?.name||parsedData.sourceFileName||'Word',
+              method:'Word + verificación',fieldOrigins:edition.origin,...(edition.discogsReleaseId?{discogsReleaseId:edition.discogsReleaseId}:{})},
+            ...(edition.discogsReleaseId?{discogsReleaseId:edition.discogsReleaseId}:{}),
+          });
+          return true;
+        });
+        if(created){savedCount++;inCatalog.push({id:albumId,data:{
+          id:albumId,artistId,genre:importGenreSelection,title:edition.title,
+          label:edition.label,catalogNumber:edition.catalogNumber,barcode:edition.barcode,
+          formats:physicalFormat?[physicalFormat]:[],discogsReleaseId:edition.discogsReleaseId
+        }});}
+        else skippedCount++;
+        completed.add(albumId);
+        await setDoc(jobRef,{completedAlbumIds:[...completed],lastSavedAt:new Date().toISOString()},{merge:true});
+      }
+      await setDoc(jobRef,{
+        status:'approved',approvedAt:new Date().toISOString(),
+        completedAlbumIds:[...completed],...(await persistWordReview(jobId,parsedData,reviewedEditions)),
+      },{merge:true});
+      setMessage('✓ Guardados '+savedCount+' álbum(es); '+skippedCount+
+        ' ediciones existentes omitidas. Progreso registrado y backup disponible.');
+      setBackupReady(false);
+    } catch(error){
+      setMessage('Importación interrumpida; '+savedCount+' álbum(es) nuevos. Reabre el borrador para continuar: '+
+        (error instanceof Error?error.message:String(error)));
+    } finally {setIsApproving(false);}
   };
 
   const extractedArtist = parsedData?.composer;
@@ -2581,14 +2770,14 @@ function ImportWordPage() {
           </div>
 
           <label className="block rounded-2xl border border-dashed border-ink/20 bg-ink/[0.03] p-6 hover:border-gold/50 transition-colors">
-            <input type="file" accept=".docx" className="hidden" onChange={handleFileChange} />
+            <input type="file" accept=".docx" multiple className="hidden" onChange={handleFileChange} />
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-full bg-ink text-paper flex items-center justify-center">
                 <Upload size={20} />
               </div>
               <div>
-                <p className="font-medium text-ink">{selectedFile ? selectedFile.name : 'Haz clic para elegir un archivo Word'}</p>
-                <p className="text-sm text-ink/50">Formato admitido: .docx</p>
+                <p className="font-medium text-ink">{pendingFiles.length ? pendingFiles.map(file=>file.name).join(' · ') : 'Haz clic para elegir uno o varios archivos Word'}</p>
+                <p className="text-sm text-ink/50">Archivos .docx (hasta 8 MB por archivo) · Selección múltiple</p>
               </div>
             </div>
           </label>
@@ -2623,25 +2812,31 @@ function ImportWordPage() {
             <button
               type="button"
               onClick={handleProcessFile}
-              disabled={!selectedFile || isUploading}
+              disabled={!pendingFiles.length || isUploading}
               className="px-6 py-3 rounded-full bg-ink text-paper text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gold transition-colors"
             >
-              {isUploading ? 'Procesando…' : 'Procesar con AI'}
+              {isUploading ? 'Procesando…' : 'Procesar archivos con AI'}
             </button>
 
             <button
               type="button"
               onClick={handleSaveDraft}
-              disabled={!parsedData || isSavingDraft}
+              disabled={!parsedData || isSavingDraft || isApproving}
               className="px-6 py-3 rounded-full border border-ink/15 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-ink hover:text-paper transition-colors"
             >
               {isSavingDraft ? 'Guardando…' : 'Guardar borrador'}
             </button>
 
+            <button type="button" onClick={prepareWordBackup} disabled={!parsedData || isApproving || isSavingDraft}
+              className="rounded-full border border-ink/20 px-5 py-3 text-sm font-medium disabled:opacity-40">
+              {backupReady ? 'Descargar backup actualizado ✓' : 'Descargar backup antes de guardar'}
+            </button>
+            {backupDetails && <p role="status" className="w-full text-xs text-ink/60">{backupDetails}</p>}
+
             <button
               type="button"
               onClick={handleApproveAndSave}
-              disabled={!parsedData || isApproving}
+              disabled={!parsedData || isApproving || !backupReady || pendingReviewConflicts(reviewedEditions).length>0}
               className="px-6 py-3 rounded-full bg-gold text-ink text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-95 transition-all"
             >
               {isApproving ? 'Guardando…' : 'Aprobar y guardar'}
@@ -2697,6 +2892,37 @@ function ImportWordPage() {
             </ol>
           </div>
 
+          <details className="rounded-2xl border border-ink/10 p-4 space-y-3">
+            <summary className="text-sm font-semibold cursor-pointer">Restaurar fichas ausentes desde backup JSON</summary>
+            <p className="text-xs text-ink/55 my-3">Recuperación no destructiva: sólo recrea fichas eliminadas. No deshace las altas de importaciones ni sobrescribe cambios posteriores.</p>
+            <input aria-label="Archivo backup JSON" type="file" accept=".json,application/json"
+              onChange={readRestoreBackup} className="block w-full text-xs"/>
+            {restorePreview && (
+              <div className="space-y-2">
+                <p className="text-xs">{restorePreview.artist?'1 artista':'0 artistas'} · {restorePreview.albums.length} álbum(es) en el backup</p>
+                <button type="button" disabled={isApproving} onClick={restoreMissingFromBackup}
+                  className="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold disabled:opacity-40">
+                  Restaurar sólo fichas ausentes
+                </button>
+              </div>
+            )}
+          </details>
+          {batchResults.length>0 && (
+            <div className="rounded-2xl border border-ink/10 p-4 space-y-3">
+              <h3 className="text-xs uppercase tracking-widest font-bold text-gold">Archivos del lote</h3>
+              <div className="flex flex-wrap gap-2">
+                {batchResults.map((item,index)=>(
+                  <button key={index} type="button" onClick={()=>activateBatch(index)}
+                    className={cn('rounded-full px-3 py-2 text-xs border',
+                      currentBatchIndex===index?'border-gold bg-gold/10':'border-ink/15')}>
+                    {item.data?'✓':'!'} {item.file.name}
+                  </button>
+                ))}
+              </div>
+              {batchResults[currentBatchIndex]?.error && <p role="alert" className="text-xs text-red-600">{batchResults[currentBatchIndex].error}</p>}
+              <p className="text-xs text-ink/50">Cada Word se revisa y guarda por separado; cambiar de archivo no fusiona artistas diferentes.</p>
+            </div>
+          )}
           {message ? (
             <div className="rounded-2xl border border-ink/10 bg-paper p-4 text-sm text-ink/75">{message}</div>
           ) : null}
@@ -2721,9 +2947,38 @@ function ImportWordPage() {
                     <div className="rounded-2xl bg-ink/[0.03] p-4"><span className="text-ink/45">Nacimiento</span><div className="font-medium mt-1">{extractedArtist?.birthDate || '—'} {extractedArtist?.birthPlace ? `· ${extractedArtist.birthPlace}` : ''}</div></div>
                     <div className="rounded-2xl bg-ink/[0.03] p-4"><span className="text-ink/45">Fallecimiento</span><div className="font-medium mt-1">{extractedArtist?.deathDate || '—'} {extractedArtist?.deathPlace ? `· ${extractedArtist.deathPlace}` : ''}</div></div>
                   </div>
-                  <div className="rounded-2xl bg-ink/[0.03] p-4 text-sm">
-                    <span className="text-ink/45">Biografía</span>
-                    <p className="mt-2 leading-relaxed text-ink/75">{extractedArtist?.biography || '—'}</p>
+                  <div className="rounded-2xl border border-ink/10 p-4 space-y-4">
+                    <h4 className="font-medium text-sm">Biografía · Comparar antes de guardar</h4>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      <div className="rounded-xl bg-ink/[0.03] p-3">
+                        <p className="text-xs uppercase tracking-widest text-ink/40 mb-2">Actual en el catálogo</p>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{existingArtist?.biography || 'Sin biografía guardada'}</p>
+                      </div>
+                      <div className="rounded-xl bg-gold/[0.06] p-3">
+                        <p className="text-xs uppercase tracking-widest text-gold mb-2">Del documento Word</p>
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{extractedArtist?.biography || 'Sin biografía en el Word'}</p>
+                      </div>
+                    </div>
+                    {existingArtist?.biography?.trim() ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-ink/60">Elige qué hacer con la biografía existente:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {([['keep','Conservar actual'],['replace','Reemplazar con Word'],['edit','Editar/combinar']] as const).map(([value,label])=>(
+                            <button type="button" key={value} aria-pressed={biographyChoice===value}
+                              onClick={()=>{setBiographyChoice(value);markReviewChanged();}}
+                              className={cn('rounded-full border px-4 py-2 text-xs',
+                                biographyChoice===value?'bg-ink text-paper border-ink':'border-ink/15')}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : <p className="text-xs text-ink/60">No hay biografía existente: se añadirá la del Word, sin sobrescribir datos.</p>}
+                    {biographyChoice==='edit' && (
+                      <textarea aria-label="Biografía editada" rows={7} value={biographyDraft}
+                        onChange={event=>{setBiographyDraft(event.target.value);markReviewChanged();}}
+                        className="w-full rounded-xl border border-ink/10 bg-white p-3 text-sm leading-relaxed"/>
+                    )}
                   </div>
                 </div>
 
@@ -2743,48 +2998,127 @@ function ImportWordPage() {
                   </div>
                   {enrichMessage && <p role="status" className="text-xs rounded-lg bg-ink/5 p-3 text-ink/70">{enrichMessage}</p>}
                   {albumsForImport.map((candidate, index) => {
-                    const source = extractedCandidates[index];
-                    const key = normalizedEditionKey(source);
-                    const matches = discogsMatches[key] || [];
-                    const enriched = enrichedWordAlbums[key];
-                    return (
-                      <div key={key + '-' + index} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-3">
-                        <div className="flex gap-3 items-start">
-                          {enriched?.imageUrl ? <img src={enriched.imageUrl} alt={candidate.title} className="w-20 h-20 rounded-xl object-cover shrink-0" /> : <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center"><DiscIcon size={28} className="text-ink/20" /></div>}
-                          <div className="min-w-0 space-y-1 flex-1">
-                            <h4 className="font-serif text-xl break-words">{candidate.title || 'Título no identificado'}</h4>
-                            <p className="text-xs text-ink/60 break-words">{[candidate.label, candidate.catalogNumber, candidate.barcode && `EAN: ${candidate.barcode}`, candidate.format, candidate.editionYear].filter(Boolean).join(' · ') || 'Edición sin identificadores'}</p>
-                            {enriched?.discogsReleaseId && <p className="text-xs text-gold font-semibold">Discogs #{enriched.discogsReleaseId} · Verificado</p>}
-                          </div>
+                    const key=candidate.sourceKey;
+                    const matches=discogsMatches[key]||[];
+                    const existingEdition=catalogForReview.find(album=>
+                      Boolean(candidate.discogsReleaseId && album.discogsReleaseId===candidate.discogsReleaseId) ||
+                      Boolean(candidate.catalogNumber && album.catalogNumber===candidate.catalogNumber &&
+                        album.label?.toLowerCase().trim()===candidate.label.toLowerCase().trim() &&
+                        (!candidate.editionYear || !album.releaseYear || album.releaseYear===candidate.editionYear) &&
+                        normalizePhysicalFormat(album.formats?.[0]||'')===normalizePhysicalFormat(candidate.format)));
+                    const fields: Array<[ReviewField,string]> = [
+                      ['title','Título del álbum'], ['label','Sello de tu ejemplar'],
+                      ['catalogNumber','Nº de catálogo'],['barcode','Barcode'],
+                      ['format','Formato (CD/Vinilo)'],['editionYear','Año de edición'],
+                      ['country','País']
+                    ];
+                    return <div key={key} className="rounded-2xl border border-ink/10 p-4 sm:p-5 space-y-4">
+                      <div className="flex items-start gap-3">
+                        {candidate.imageUrl?
+                          <img src={candidate.imageUrl} alt="" className="w-20 h-20 rounded-xl object-cover shrink-0"/>:
+                          <div className="w-20 h-20 shrink-0 rounded-xl bg-ink/5 flex items-center justify-center">
+                            <DiscIcon size={26} className="text-ink/20"/>
+                          </div>}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-serif text-xl break-words">{candidate.title||'Sin título'}</p>
+                          <p className="text-xs text-ink/55">{candidate.label||'Sin sello'} · {candidate.catalogNumber||'Sin catálogo'}</p>
+                          <p className="text-xs text-ink/50 mt-1">
+                            {candidate.discogsReleaseId?'Discogs release #'+candidate.discogsReleaseId:'Datos extraídos del Word; falta verificar la edición'}
+                          </p>
                         </div>
-                        {(candidate.barcode || candidate.catalogNumber) && (
-                          <div className="space-y-2">
-                            <button type="button" disabled={Boolean(enrichingAlbum)} onClick={() => lookupWordAlbum(source)}
-                              className="rounded-full border border-ink/20 px-4 py-2 text-xs font-bold hover:bg-ink/5 disabled:opacity-40">
-                              {enrichingAlbum === key ? 'Buscando...' : 'Buscar edición en Discogs'}
-                            </button>
-                            {matches.length > 0 && (
-                              <div className="flex flex-col sm:flex-row gap-2">
-                                <select aria-label={`Seleccionar edición de ${candidate.title}`}
-                                  value={discogsSelection[key] || ''}
-                                  onChange={event => setDiscogsSelection(current => ({...current, [key]: event.target.value}))}
-                                  className="min-w-0 flex-1 rounded-xl bg-ink/5 px-3 py-3 text-sm">
-                                  <option value="">Elegir edición exacta...</option>
-                                  {matches.map(match => (
-                                    <option value={match.id} key={match.id}>
-                                      {match.title} · {match.year || 's/f'} · {match.catno} · {match.formats.join('/')} · #{match.id}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button type="button" disabled={Boolean(enrichingAlbum) || !discogsSelection[key]}
-                                  onClick={() => confirmWordDiscogsRelease(source)}
-                                  className="rounded-xl bg-ink text-paper px-4 py-3 text-xs font-semibold disabled:opacity-40">Aplicar edición</button>
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <label className="flex items-center gap-1 text-xs whitespace-nowrap">
+                          <input type="checkbox" checked={candidate.include} onChange={event=>
+                            updateReviewedEdition(key,item=>({...item,include:event.target.checked}))}/>
+                          Importar
+                        </label>
                       </div>
-                    );
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {fields.map(([field,label])=>(
+                          <label key={field} className="space-y-1 min-w-0">
+                            <span className="text-xs font-medium text-ink/60">{label}</span>
+                            <input value={String(candidate[field]||'')}
+                              onChange={event=>updateReviewedEdition(key,item=>
+                                editReviewField(item,field,event.target.value))}
+                              className="w-full min-w-0 rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
+                            <span className="block text-[10px] text-ink/40">Fuente: {candidate.origin[field]||'Sin identificar'}</span>
+                          </label>
+                        ))}
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-ink/60">Sello original (histórico)</span>
+                          <input value={candidate.originalLabel||''} onChange={event=>
+                            updateReviewedEdition(key,item=>({...item,originalLabel:event.target.value}))}
+                            className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"
+                            placeholder="Dejar en blanco si se desconoce"/>
+                        </label>
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-ink/60">Discos físicos en el paquete</span>
+                          <input type="number" min="1" max="100" value={candidate.discCount}
+                            onChange={event=>updateReviewedEdition(key,item=>({...item,
+                              discCount:Math.min(100,Math.max(1,Number(event.target.value)||1))}))}
+                            className="w-full rounded-xl bg-ink/[0.035] border border-ink/10 px-3 py-2 text-sm"/>
+                        </label>
+                      </div>
+                      {(candidate.barcode||candidate.catalogNumber)&&(
+                        <div className="space-y-2 border-t border-ink/10 pt-3">
+                          <button type="button" disabled={Boolean(enrichingAlbum)} onClick={()=>lookupWordAlbum(candidate)}
+                            className="rounded-full border border-ink/15 px-4 py-2 text-xs font-semibold disabled:opacity-40">
+                            {enrichingAlbum===key?'Buscando...':'Contrastar con Discogs'}
+                          </button>
+                          {!!matches.length&&(
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <select aria-label={'Edición de '+candidate.title} value={discogsSelection[key]||''}
+                                onChange={event=>setDiscogsSelection(current=>({...current,[key]:event.target.value}))}
+                                className="flex-1 min-w-0 bg-ink/5 rounded-xl px-3 py-2 text-sm">
+                                <option value="">Elige una edición comprobable...</option>
+                                {matches.map(match=><option value={match.id} key={match.id}>
+                                  {match.title} · {match.year} · {match.catno} · {match.labels.join('/')} · {match.formats.join('/')}
+                                </option>)}
+                              </select>
+                              <button type="button" disabled={!discogsSelection[key]||Boolean(enrichingAlbum)}
+                                onClick={()=>confirmWordDiscogsRelease(candidate)}
+                                className="rounded-xl bg-ink text-paper px-4 py-2 text-xs disabled:opacity-40">Aplicar edición</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {existingEdition && (
+                        <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                          <p className="text-xs font-semibold text-amber-900">Posible edición existente · Se omitirá en vez de sobrescribir</p>
+                          <p className="text-xs text-ink/65">{existingEdition.title} · {existingEdition.label||'Sin sello'} · {existingEdition.catalogNumber||'Sin catálogo'} · {existingEdition.releaseYear||'s/f'}</p>
+                          <p className="text-xs text-ink/50">Puedes revisar el álbum existente desde el catálogo. Esta importación nunca modifica esa ficha automáticamente.</p>
+                        </div>
+                      )}
+                      {candidate.conflicts.length>0&&(
+                        <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 space-y-2">
+                          <h5 className="text-xs font-semibold text-amber-900">Diferencias detectadas · Revisión obligatoria</h5>
+                          {candidate.conflicts.map(conflict=>(
+                            <div key={conflict.field} className="rounded-lg bg-white p-3 space-y-2">
+                              <p className="text-xs font-semibold">{conflict.field} {conflict.resolved?'✓':'· pendiente'}</p>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                    resolveReviewConflict(item,conflict.field,'Word'))}
+                                  className="text-left rounded-lg border border-ink/10 px-3 py-2 text-xs">
+                                  <b>Word:</b> {conflict.word}
+                                </button>
+                                <button type="button" onClick={()=>updateReviewedEdition(key,item=>
+                                    resolveReviewConflict(item,conflict.field,'Discogs'))}
+                                  className="text-left rounded-lg border border-ink/10 px-3 py-2 text-xs">
+                                  <b>Discogs:</b> {conflict.discogs}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-xs text-ink/50">
+                        Fuentes: Word ({parsedData?.sourceFileName||selectedFile?.name||'documento'})
+                        {candidate.discogsReleaseId?' · Discogs release '+candidate.discogsReleaseId:''}.
+                        {candidate.discogsReleaseId && <a className="ml-1 underline text-gold"
+                          target="_blank" rel="noopener noreferrer"
+                          href={'https://www.discogs.com/release/'+candidate.discogsReleaseId}>Ver fuente</a>}
+                        La portada y la lista de pistas se incorporan sólo al confirmar una edición exacta.
+                      </p>
+                    </div>;
                   })}
                   {!albumsForImport.length && <p className="text-sm text-ink/50 rounded-xl border border-dashed border-ink/20 p-4">No se detectaron ediciones discográficas. Puedes guardar la biografía; no se inventarán álbumes a partir de obras aisladas.</p>}
                 </section>
@@ -2805,6 +3139,30 @@ function ImportWordPage() {
                             <span className="text-xs uppercase tracking-widest font-bold text-gold">{(rec as ServerRecording).format || '—'}</span>
                           </div>
 
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-ink/10 pt-3">
+                            <label className="space-y-1">
+                              <span className="text-xs text-ink/60">Título de la obra · Corregir</span>
+                              <input value={rec.workTitle||''} onChange={event=>{
+                                setParsedData(current=>current?{...current,recordings:(current.recordings||[]).map((item,i)=>
+                                  i===index?{...item,workTitle:event.target.value}:item)}:current);
+                                markReviewChanged();
+                              }} className="w-full min-w-0 bg-ink/5 rounded-lg p-2 text-sm"/>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-xs text-ink/60">Disco físico · Sólo si está verificado</span>
+                              <select value={rec.discNumber||''} onChange={event=>{
+                                const value=event.target.value?Number(event.target.value):undefined;
+                                setParsedData(current=>current?{...current,recordings:(current.recordings||[]).map((item,i)=>
+                                  i===index?{...item,discNumber:value}:item)}:current);
+                                markReviewChanged();
+                              }} className="w-full min-w-0 bg-ink/5 rounded-lg p-2 text-sm">
+                                <option value="">Sin asignar / No documentado</option>
+                                {Array.from({length:Math.min(100,Math.max(1,
+                                  reviewedEditions.find(item=>sameWordEdition(item,rec))?.discCount||1))},
+                                  (_,i)=>i+1).map(d=><option key={d} value={d}>Disco {d}</option>)}
+                              </select>
+                            </label>
+                          </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div><span className="text-ink/45">Sello</span><div className="mt-1">{(rec as ServerRecording).label || '—'}</div></div>
                             <div><span className="text-ink/45">Catálogo</span><div className="mt-1">{(rec as ServerRecording).catalogNumber || '—'}</div></div>
@@ -2863,11 +3221,18 @@ function ImportWordPage() {
                       <div className="font-medium text-ink">{job.fileName}</div>
                       <div className="text-sm text-ink/50">{job.createdAt || 'Sin fecha'}</div>
                     </div>
-                    <div className={cn(
-                      'inline-flex items-center rounded-full px-3 py-1 text-xs uppercase tracking-widest font-bold',
-                      job.status === 'approved' ? 'bg-gold/15 text-gold' : job.status === 'failed' ? 'bg-red-100 text-red-600' : 'bg-ink/5 text-ink/60'
-                    )}>
-                      {job.status}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className={cn(
+                        'inline-flex items-center rounded-full px-3 py-1 text-xs uppercase tracking-widest font-bold',
+                        job.status === 'approved' ? 'bg-gold/15 text-gold' : job.status === 'failed' ? 'bg-red-100 text-red-600' : 'bg-ink/5 text-ink/60'
+                      )}>{job.status}</div>
+                      {job.status!=='approved' && Boolean(job.extractedData||job.dataUrl) && (
+                        <button type="button" onClick={()=>resumeWordJob(job)}
+                          className="rounded-full border border-ink/15 px-3 py-2 text-xs">Reabrir / Reanudar</button>
+                      )}
+                      {(job.completedAlbumIds?.length||0)>0 && <span className="text-xs text-ink/50">
+                        {job.completedAlbumIds?.length} álbum(es) registrados
+                      </span>}
                     </div>
                   </div>
                 ))}
@@ -4565,9 +4930,10 @@ try {
 function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album: Album, onClose: () => void, onEdit: () => void, highlightArtistId?: string }) {
   const isWork = getCatalogRecordType(album) === 'work';
   const [artistName, setArtistName] = useState<string>(album.artistName || '');
-  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0);
+  const classicalWorkCount = (album.discs || []).reduce((total, disc) => total + (disc.works || []).length, 0) + (album.unassignedWorks?.length || 0);
   const classicalMovementCount = (album.discs || []).reduce((total, disc) =>
-    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0);
+    total + (disc.works || []).reduce((count, work) => count + (work.movements || []).length, 0), 0) +
+    (album.unassignedWorks || []).reduce((sum, work) => sum + work.movements.length, 0);
 
   useEffect(() => {
     if (!artistName) {
@@ -4843,6 +5209,23 @@ function AlbumDetailModal({ album, onClose, onEdit, highlightArtistId }: { album
                   )))}
               </div>
             </div>
+          )}
+
+          {album.genre === 'classical' && Boolean(album.unassignedWorks?.length) && (
+            <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-3">
+              <h3 className="font-serif text-xl">Obras sin disco identificado</h3>
+              <p className="text-xs text-ink/60">Estas obras aparecen en el Word, pero no se conoce su ubicación física en el set. No se han asignado al primer disco por suposición.</p>
+              {(album.unassignedWorks || []).map((work,index) => (
+                <div key={index} className="rounded-xl bg-white p-3 space-y-2">
+                  <p className="text-sm font-semibold">{work.title}</p>
+                  {work.compositionDate && <p className="text-xs text-ink/50">Composición: {work.compositionDate}</p>}
+                  {(work.movements||[]).map((movement,i)=>(
+                    <p key={i} className="text-xs text-ink/70">{movement.title}
+                      {movement.notes ? ' · '+movement.notes : ''}</p>
+                  ))}
+                </div>
+              ))}
+            </section>
           )}
 
           {/* Tracks / Works Hierarchy */}
