@@ -4021,15 +4021,24 @@ function DiscogsImportPage() {
                   <label htmlFor="import-sello" className="text-[10px] uppercase tracking-widest font-bold text-ink/40">
                     Sello discográfico de tu ejemplar (no el original)
                   </label>
-                  {discogsLabelOptions.length > 1 ? (
-                    <select id="import-sello" value={label}
-                      onChange={e => { setLabel(e.target.value); }}
-                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3">
-                      <option value="">Seleccionar sello...</option>
-                      {discogsLabelOptions.map(item => <option key={item} value={item}>{item}</option>)}
-                    </select>
-                  ) : <input id="import-sello" value={label} onChange={e => { setLabel(e.target.value); }}
-                      className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3" />}
+                  <input id="import-sello" list="import-sellos-sugeridos" value={label}
+                    onChange={e => setLabel(e.target.value)}
+                    className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3"
+                    placeholder="Seleccionar o escribir el sello de tu ejemplar"/>
+                  <datalist id="import-sellos-sugeridos">
+                    {discogsLabelOptions.map(item => <option key={item} value={item}/>)}
+                  </datalist>
+                  <p className="text-xs text-ink/50">
+                    Corresponde a la edición que tienes en casa. Puedes corregirlo manualmente;
+                    no altera el Sello Original.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Sello Original · primera edición histórica</label>
+                  <input value={originalLabel} onChange={e=>setOriginalLabel(e.target.value)}
+                    className="w-full min-w-0 bg-ink/5 rounded-xl px-4 py-3"
+                    placeholder="Desconocido: dejar en blanco"/>
+                  <p className="text-xs text-ink/50">No se deduce del sello de la reedición ni se copia desde Discogs automáticamente.</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest font-bold text-ink/40">Mi colección</label>
@@ -4055,7 +4064,7 @@ function DiscogsImportPage() {
                   <Field label="País" value={country} setValue={setCountry}/>
                   <Field label="Nº catálogo edición" value={editionCatalogNumber} setValue={setEditionCatalogNumber}/>
                   <Field label="Nº catálogo original" value={originalCatalogNumber} setValue={setOriginalCatalogNumber}/>
-                  <Field label="Sello original (si se conoce)" value={originalLabel} setValue={setOriginalLabel}/>
+
                   <Field label="Año original" value={originalYear} setValue={setOriginalYear}/>
                   <Field label="Fecha edición" value={editionDate} setValue={setEditionDate}/>
                   <div className="space-y-2">
