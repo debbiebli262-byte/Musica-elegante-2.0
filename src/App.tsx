@@ -3013,6 +3013,30 @@ function ImportWordPage() {
                             <span className="text-xs uppercase tracking-widest font-bold text-gold">{(rec as ServerRecording).format || '—'}</span>
                           </div>
 
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-ink/10 pt-3">
+                            <label className="space-y-1">
+                              <span className="text-xs text-ink/60">Título de la obra · Corregir</span>
+                              <input value={rec.workTitle||''} onChange={event=>{
+                                setParsedData(current=>current?{...current,recordings:(current.recordings||[]).map((item,i)=>
+                                  i===index?{...item,workTitle:event.target.value}:item)}:current);
+                                markReviewChanged();
+                              }} className="w-full min-w-0 bg-ink/5 rounded-lg p-2 text-sm"/>
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-xs text-ink/60">Disco físico · Sólo si está verificado</span>
+                              <select value={rec.discNumber||''} onChange={event=>{
+                                const value=event.target.value?Number(event.target.value):undefined;
+                                setParsedData(current=>current?{...current,recordings:(current.recordings||[]).map((item,i)=>
+                                  i===index?{...item,discNumber:value}:item)}:current);
+                                markReviewChanged();
+                              }} className="w-full min-w-0 bg-ink/5 rounded-lg p-2 text-sm">
+                                <option value="">Sin asignar / No documentado</option>
+                                {Array.from({length:Math.min(100,Math.max(1,
+                                  reviewedEditions.find(item=>sameWordEdition(item,rec))?.discCount||1))},
+                                  (_,i)=>i+1).map(d=><option key={d} value={d}>Disco {d}</option>)}
+                              </select>
+                            </label>
+                          </div>
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div><span className="text-ink/45">Sello</span><div className="mt-1">{(rec as ServerRecording).label || '—'}</div></div>
                             <div><span className="text-ink/45">Catálogo</span><div className="mt-1">{(rec as ServerRecording).catalogNumber || '—'}</div></div>
@@ -3071,11 +3095,18 @@ function ImportWordPage() {
                       <div className="font-medium text-ink">{job.fileName}</div>
                       <div className="text-sm text-ink/50">{job.createdAt || 'Sin fecha'}</div>
                     </div>
-                    <div className={cn(
-                      'inline-flex items-center rounded-full px-3 py-1 text-xs uppercase tracking-widest font-bold',
-                      job.status === 'approved' ? 'bg-gold/15 text-gold' : job.status === 'failed' ? 'bg-red-100 text-red-600' : 'bg-ink/5 text-ink/60'
-                    )}>
-                      {job.status}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className={cn(
+                        'inline-flex items-center rounded-full px-3 py-1 text-xs uppercase tracking-widest font-bold',
+                        job.status === 'approved' ? 'bg-gold/15 text-gold' : job.status === 'failed' ? 'bg-red-100 text-red-600' : 'bg-ink/5 text-ink/60'
+                      )}>{job.status}</div>
+                      {job.status!=='approved' && Boolean(job.extractedData) && (
+                        <button type="button" onClick={()=>resumeWordJob(job)}
+                          className="rounded-full border border-ink/15 px-3 py-2 text-xs">Reabrir / Reanudar</button>
+                      )}
+                      {(job.completedAlbumIds?.length||0)>0 && <span className="text-xs text-ink/50">
+                        {job.completedAlbumIds?.length} álbum(es) registrados
+                      </span>}
                     </div>
                   </div>
                 ))}
