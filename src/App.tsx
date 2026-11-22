@@ -7153,7 +7153,7 @@ function AlbumModal({ album, artistId, genre, onClose }: { album?: Album, artist
                         </label>
                       </div>
                       <p className="text-xs text-ink/60">
-                        **Sello Editor** = sello de esta copia. **Sello Original** = primera edición histórica:
+                        <strong>Sello Editor</strong> = sello de esta copia. <strong>Sello Original</strong> = primera edición histórica:
                         Discogs no lo cambiará ni lo deducirá automáticamente.
                       </p>
                       {discogsReviewError&&<p role="alert" className="text-sm text-red-600">{discogsReviewError}</p>}
