@@ -3455,16 +3455,16 @@ function DiscogsImportPage() {
   const [label, setLabel] = useState('');
   const [discogsLabelOptions, setDiscogsLabelOptions] = useState<string[]>([]);
   const [catalogEditorSellos, setCatalogEditorSellos] = useState<string[]>([]);
-  const editorSelloChoices = editorSelloOptions(
-    catalogEditorSellos,
-    [...discogsLabelOptions, ...editionCandidates.flatMap(candidate => candidate.labels)],
-    [label, editionLabel]
-  );
   const [editionCandidates, setEditionCandidates] = useState<DiscogsEditionCandidate[]>([]);
   const [editionDialogOpen, setEditionDialogOpen] = useState(false);
   const [editionConfirmed, setEditionConfirmed] = useState(false);
   const [editionLabel, setEditionLabel] = useState('');
   const [editionFormat, setEditionFormat] = useState<'CD' | 'Vinilo' | ''>('');
+  const editorSelloChoices = editorSelloOptions(
+    catalogEditorSellos,
+    [...discogsLabelOptions, ...editionCandidates.flatMap(candidate => candidate.labels)],
+    [label, editionLabel]
+  );
   const [editionReleaseId, setEditionReleaseId] = useState('');
   const [editionMode, setEditionMode] = useState<'discogs' | 'manual'>('discogs');
   const [manualTitle, setManualTitle] = useState('');
