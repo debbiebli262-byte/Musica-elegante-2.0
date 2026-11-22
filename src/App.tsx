@@ -2440,31 +2440,76 @@ function ImportWordPage() {
     }
   };
 
+  const resolveJobId = async () => {
+    if (activeJobId) return activeJobId;
+    if (!selectedFile) throw new Error('Selecciona de nuevo el Word.');
+    const hash = await crypto.subtle.digest('SHA-256', await selectedFile.arrayBuffer());
+    return 'word_' + Array.from(new Uint8Array(hash)).map(value => value.toString(16).padStart(2, '0')).join('');
+  };
   const handleSaveDraft = async () => {
-    if (!selectedFile || !parsedData) return;
-
-    setIsSavingDraft(true);
-    setMessage('');
-
+    if (!parsedData || (!selectedFile && !activeJobId)) return;
+    setIsSavingDraft(true);setMessage('');
     try {
-      const uploadedFile = await uploadWordFileToStorage(selectedFile);
-
-      await addDoc(collection(db, 'import_jobs'), {
-        fileName: selectedFile.name,
-        createdAt: new Date().toISOString(),
-        status: 'draft',
-        source: 'word_upload',
-        fileUrl: uploadedFile.downloadURL,
-        storagePath: uploadedFile.storagePath,
-        extractedData: parsedData,
-      });
-
-      setMessage('Importación guardada como borrador en Firebase.');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'import_jobs');
-      setMessage('No se pudo guardar la importación como borrador en Firebase.');
-    } finally {
-      setIsSavingDraft(false);
+      const jobId = await resolveJobId(), jobRef = doc(db, 'import_jobs', jobId);
+      const previous = await getDoc(jobRef);
+      if (previous.exists() && previous.data().status === 'approved') {
+        setMessage('Este Word ya fue importado. No se sobrescribirán registros anteriores.');return;
+      }
+      const upload = selectedFile && !previous.data()?.fileUrl ? await uploadWordFileToStorage(selectedFile) : null;
+      await setDoc(jobRef, {
+        fileName: selectedFile?.name || parsedData.sourceFileName || previous.data()?.fileName || 'Word',
+        createdAt: previous.data()?.createdAt || new Date().toISOString(),
+        status: 'draft', source: 'word_upload',
+        fileUrl: upload?.downloadURL || previous.data()?.fileUrl || '',
+        storagePath: upload?.storagePath || previous.data()?.storagePath || '',
+        extractedData: parsedData, reviewedEditions,
+        completedAlbumIds: previous.data()?.completedAlbumIds || [],
+      }, {merge:true});
+      setActiveJobId(jobId);
+      setMessage('Borrador guardado. Se puede recuperar desde el historial.');
+    } catch(error) {
+      setMessage('Error guardando borrador: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {setIsSavingDraft(false);}
+  };
+  const resumeWordJob = (job:ImportJobRecord) => {
+    if (!job.extractedData || job.status === 'approved') {
+      setMessage('Este trabajo ya fue aprobado o no tiene datos reutilizables.');return;
+    }
+    setSelectedFile(null);setPendingFiles([]);setBatchResults([]);
+    setActiveJobId(job.id);
+    setActiveParsed(job.extractedData, job.reviewedEditions?.length?job.reviewedEditions:undefined);
+    setMessage('Borrador restaurado. Revisa los datos y descarga una copia nueva antes de guardar.');
+  };
+  const prepareWordBackup = async () => {
+    if (!parsedData?.composer?.name) return;
+    setMessage('');
+    try {
+      const existingPerson = await getArtistByName(parsedData.composer.name);
+      const albums = await getDocs(collection(db, 'albums'));
+      const affected = albums.docs.filter(album => {
+        const data = album.data() as Album;
+        return reviewedEditions.some(edition => edition.include && (
+          edition.discogsReleaseId && data.discogsReleaseId === edition.discogsReleaseId ||
+          (edition.catalogNumber && data.catalogNumber === edition.catalogNumber &&
+            data.label?.trim().toLowerCase() === edition.label.trim().toLowerCase())
+        ));
+      }).map(album => ({id:album.id,...album.data()}));
+      const backup = {
+        savedAt:new Date().toISOString(), sourceFile:selectedFile?.name || parsedData.sourceFileName,
+        note:'Copia de fichas afectadas; no incluye imágenes en Firebase Storage.',
+        existingArtist:existingPerson||null, matchingExistingAlbums:affected,
+        proposedArtist:parsedData.composer, reviewedEditions, recordings:parsedData.recordings||[],
+      };
+      const url=URL.createObjectURL(new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}));
+      const anchor=document.createElement('a');anchor.href=url;
+      anchor.download=fileBackupFilename(selectedFile?.name||parsedData.sourceFileName||'import');
+      document.body.appendChild(anchor);anchor.click();anchor.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),30000);
+      setBackupReady(true);
+      setBackupDetails(affected.length+' posibles coincidencias existentes. Backup preparado.');
+    } catch(error) {
+      setBackupReady(false);
+      setMessage('Error preparando copia: '+(error instanceof Error?error.message:String(error)));
     }
   };
 
